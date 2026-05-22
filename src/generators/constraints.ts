@@ -19,10 +19,20 @@ export interface StringConstraints {
   cuid?: boolean;
   cuid2?: boolean;
   ulid?: boolean;
+  nanoid?: boolean;
+  jwt?: boolean;
   datetime?: boolean;
+  dateOnly?: boolean;
+  timeOnly?: boolean;
+  duration?: boolean;
   ip?: boolean;
+  ipv4?: boolean;
+  ipv6?: boolean;
+  cidr?: boolean;
+  cidrv6?: boolean;
   emoji?: boolean;
   base64?: boolean;
+  base64url?: boolean;
 }
 
 export function validateStringConstraints(
@@ -98,119 +108,178 @@ function generateUrl(rng: SeededRNG): string {
   return `${rng.pick(protocols)}://${rng.pick(words)}.${rng.pick(tlds)}`;
 }
 
+// ---------------------------------------------------------------------------
+// Regex generation — expanded subset
+// ---------------------------------------------------------------------------
+
+// Printable ASCII 33 ('!') – 126 ('~'), no space/control/newline
+const PRINTABLE_ASCII = Array.from({ length: 94 }, (_, i) => String.fromCharCode(33 + i));
+const CHARS_WORD = CHARS_ALNUM + "_";
+const CHARS_NONWORD = [" ", "-", ".", ",", "!", "@", "#", "%"];
+const CHARS_WHITESPACE = [" ", "\t"];
+
 /**
- * Simple regex generator — supports basic patterns only.
- * Throws REGEX_UNSUPPORTED for complex patterns.
+ * Expands a shorthand escape sequence to a char pool.
+ * Returns null for zero-width assertions (\b, \B) — they produce no characters.
  */
+function expandEscape(ch: string): string[] | null {
+  switch (ch) {
+    case "d": return CHARS_DIGIT.split("");
+    case "D": return CHARS_ALPHA.split("");       // non-digit: letters are always safe
+    case "w": return CHARS_WORD.split("");
+    case "W": return CHARS_NONWORD;
+    case "s": return CHARS_WHITESPACE;
+    case "S": return CHARS_ALNUM.split("");
+    case "b": return null;                         // zero-width word boundary
+    case "B": return null;                         // zero-width non-word boundary
+    case "n": return ["\n"];
+    case "r": return ["\r"];
+    case "t": return ["\t"];
+    default:  return [ch];                         // escaped literal (\-, \+, \(, \.  …)
+  }
+}
+
+/**
+ * Splits `src` on top-level `|` — ignores `|` inside [...] or (...).
+ */
+function splitTopLevelAlts(src: string): string[] {
+  const parts: string[] = [];
+  let depth = 0;
+  let inClass = false;
+  let start = 0;
+  for (let i = 0; i < src.length; i++) {
+    const c = src[i]!;
+    if (c === "\\") { i++; continue; }            // skip escaped char
+    if (c === "[" && !inClass) { inClass = true; continue; }
+    if (c === "]" && inClass) { inClass = false; continue; }
+    if (inClass) continue;
+    if (c === "(") { depth++; continue; }
+    if (c === ")") { depth--; continue; }
+    if (c === "|" && depth === 0) {
+      parts.push(src.slice(start, i));
+      start = i + 1;
+    }
+  }
+  parts.push(src.slice(start));
+  return parts;
+}
+
+/**
+ * Returns a description of genuinely unsupported features, or null if supported.
+ * We now support: literals, [...], [^...], \d \w \s \D \W \S \b, ., |,
+ * (?:...), (...), {n}, {n,m}, ?, *, +, lazy modifiers, anchors ^ $.
+ */
+function detectUnsupportedRegex(src: string): string | null {
+  if (/\(\?[=!]/.test(src))    return "lookahead/lookbehind (?=...) or (?!...)";
+  if (/\(\?<[=!]/.test(src))   return "lookbehind (?<=...) or (?<!...)";
+  if (/\\[1-9]/.test(src))     return "backreferences \\1...\\9";
+  if (/\(\?<\w/.test(src))     return "named capture groups (?<name>...)";
+  if (/\\[pP]\{/.test(src))    return "unicode properties \\p{...}";
+  if (/[+*?]\+/.test(src))     return "possessive quantifiers ++, *+, ?+";
+  return null;
+}
+
 export function generateFromRegex(
   regex: RegExp,
   rng: SeededRNG,
   path: string[],
 ): string {
   const src = regex.source;
-
-  // Detect unsupported features
-  const unsupportedPatterns = [
-    /\(\?[=!<]/,          // lookahead / lookbehind
-    /\(\?:/,              // non-capturing groups (we support capturing only)
-    /\\[bBdDwWsS]/,       // word boundaries, \d \w \s classes
-    /[+*?]\?/,            // lazy quantifiers
-    /\{[^}]*,[^}]*\}/,    // complex range {n,m} — we handle simple {n} and {n,m} with basic ranges
-    /\[\^/,               // negated character classes
-    /\./,                 // dot (any char) — too broad
-    /\|(?![^(]*\))/,      // top-level alternation outside parens
-  ];
-
-  // Allow simple patterns through
-  const isSimple =
-    /^(\^)?([a-zA-Z0-9\[\]\-\+\*\?\{\},\(\)\|]|\\.)*(\$)?$/.test(src) &&
-    !unsupportedPatterns.some((p) => p.test(src));
-
-  if (!isSimple) {
+  const unsupported = detectUnsupportedRegex(src);
+  if (unsupported) {
     throw new ZodForgeError(
-      `Regex at ${formatPath(path)} contains unsupported pattern: /${src}/. ` +
-        `zod-forge supports only simple patterns (character classes, quantifiers, fixed alternation). See README for details.`,
+      `Regex at ${formatPath(path)} uses unsupported feature: ${unsupported}. ` +
+        `Supported: literals, [...], [^...], \\d \\w \\s and inverses, ., |, (?:...), {n}, {n,m}, ?, *, +.`,
       "REGEX_UNSUPPORTED",
     );
   }
-
   return generateSimpleRegex(src, rng, path);
 }
 
-function generateSimpleRegex(
-  src: string,
-  rng: SeededRNG,
-  path: string[],
-): string {
+function generateSimpleRegex(src: string, rng: SeededRNG, path: string[]): string {
+  // Strip anchors
+  let s = src;
+  if (s.startsWith("^")) s = s.slice(1);
+  if (s.endsWith("$")) s = s.slice(0, -1);
+
+  // Top-level alternation: pick one branch
+  const alts = splitTopLevelAlts(s);
+  if (alts.length > 1) return generateSimpleRegex(rng.pick(alts), rng, path);
+
   let result = "";
-  let i = src.startsWith("^") ? 1 : 0;
-  const end = src.endsWith("$") ? src.length - 1 : src.length;
+  let i = 0;
 
-  while (i < end) {
-    const ch = src[i]!;
+  while (i < s.length) {
+    const ch = s[i]!;
 
-    // Character class [...]
+    // --- Character class [...] (including negated [^...])
     if (ch === "[") {
-      const close = src.indexOf("]", i + 1);
-      if (close === -1) {
-        throw new ZodForgeError(
-          `Unclosed character class in regex at ${formatPath(path)}`,
-          "REGEX_UNSUPPORTED",
-        );
+      const close = findCharClassClose(s, i + 1);
+      if (close === -1) throw new ZodForgeError(`Unclosed [...] in regex at ${formatPath(path)}`, "REGEX_UNSUPPORTED");
+      const classContent = s.slice(i + 1, close);
+      const negated = classContent.startsWith("^");
+      const content = negated ? classContent.slice(1) : classContent;
+      const included = expandCharClass(content);
+      let chars: string[];
+      if (negated) {
+        const excluded = new Set(included);
+        chars = CHARS_ALNUM.split("").filter((c) => !excluded.has(c));
+        if (chars.length === 0) chars = [" "];
+      } else {
+        chars = included;
       }
-      const classContent = src.slice(i + 1, close);
-      const chars = expandCharClass(classContent);
       i = close + 1;
-      const quantifier = parseQuantifier(src, i);
-      const count = resolveQuantifier(quantifier, rng);
-      i += quantifier.raw.length;
-      for (let k = 0; k < count; k++) {
-        result += rng.pick(chars);
-      }
+      const q = parseQuantifier(s, i);
+      const count = resolveQuantifier(q, rng);
+      i += q.raw.length;
+      for (let k = 0; k < count; k++) result += rng.pick(chars);
       continue;
     }
 
-    // Alternation group (foo|bar|baz)
+    // --- Groups: (...) and (?:...)
     if (ch === "(") {
-      const close = findMatchingParen(src, i);
-      if (close === -1) {
-        throw new ZodForgeError(
-          `Unclosed group in regex at ${formatPath(path)}`,
-          "REGEX_UNSUPPORTED",
-        );
-      }
-      const inner = src.slice(i + 1, close);
-      const alts = inner.split("|");
-      const chosen = rng.pick(alts);
-      result += generateSimpleRegex(chosen, rng, path);
+      const close = findMatchingParen(s, i);
+      if (close === -1) throw new ZodForgeError(`Unclosed group in regex at ${formatPath(path)}`, "REGEX_UNSUPPORTED");
+      let inner = s.slice(i + 1, close);
+      if (inner.startsWith("?:")) inner = inner.slice(2); // strip non-capturing marker
+      const groupVal = generateSimpleRegex(inner, rng, path);
       i = close + 1;
+      const q = parseQuantifier(s, i);
+      const count = resolveQuantifier(q, rng);
+      i += q.raw.length;
+      for (let k = 0; k < count; k++) result += groupVal;
       continue;
     }
 
-    // Literal character
+    // --- Dot — any printable non-newline char
+    if (ch === ".") {
+      i++;
+      const q = parseQuantifier(s, i);
+      const count = resolveQuantifier(q, rng);
+      i += q.raw.length;
+      for (let k = 0; k < count; k++) result += rng.pick(PRINTABLE_ASCII);
+      continue;
+    }
+
+    // --- Escape sequences
     if (ch === "\\") {
-      // Escaped literal
-      const next = src[i + 1];
-      if (next === undefined) {
-        throw new ZodForgeError(
-          `Trailing backslash in regex at ${formatPath(path)}`,
-          "REGEX_UNSUPPORTED",
-        );
-      }
-      const literal = next;
+      const next = s[i + 1];
+      if (next === undefined) throw new ZodForgeError(`Trailing backslash in regex at ${formatPath(path)}`, "REGEX_UNSUPPORTED");
       i += 2;
-      const quantifier = parseQuantifier(src, i);
-      const count = resolveQuantifier(quantifier, rng);
-      i += quantifier.raw.length;
-      for (let k = 0; k < count; k++) result += literal;
+      const expansion = expandEscape(next);
+      if (expansion === null) continue; // zero-width assertion — no output
+      const q = parseQuantifier(s, i);
+      const count = resolveQuantifier(q, rng);
+      i += q.raw.length;
+      for (let k = 0; k < count; k++) result += rng.pick(expansion);
       continue;
     }
 
-    // Regular literal
+    // --- Regular literal
     i++;
-    const quantifier = parseQuantifier(src, i);
-    const count = resolveQuantifier(quantifier, rng);
-    i += quantifier.raw.length;
+    const q = parseQuantifier(s, i);
+    const count = resolveQuantifier(q, rng);
+    i += q.raw.length;
     for (let k = 0; k < count; k++) result += ch;
   }
 
@@ -222,7 +291,17 @@ function expandCharClass(content: string): string[] {
   let i = 0;
   while (i < content.length) {
     const ch = content[i]!;
-    if (content[i + 1] === "-" && content[i + 2] !== undefined) {
+    // Handle escaped chars inside class (e.g. [\d\w] or [a\-z])
+    if (ch === "\\") {
+      const next = content[i + 1];
+      if (next !== undefined) {
+        const expansion = expandEscape(next);
+        if (expansion) chars.push(...expansion);
+        i += 2;
+        continue;
+      }
+    }
+    if (content[i + 1] === "-" && content[i + 2] !== undefined && content[i + 2] !== "]") {
       const from = ch.charCodeAt(0);
       const to = content[i + 2]!.charCodeAt(0);
       for (let c = from; c <= to; c++) chars.push(String.fromCharCode(c));
@@ -243,39 +322,50 @@ interface Quantifier {
 
 function parseQuantifier(src: string, pos: number): Quantifier {
   const ch = src[pos];
-  if (ch === "?") return { raw: "?", min: 0, max: 1 };
-  if (ch === "*") return { raw: "*", min: 0, max: 5 };
-  if (ch === "+") return { raw: "+", min: 1, max: 5 };
-  if (ch === "{") {
+  let q: Quantifier | undefined;
+  if (ch === "?") q = { raw: "?", min: 0, max: 1 };
+  else if (ch === "*") q = { raw: "*", min: 0, max: 5 };
+  else if (ch === "+") q = { raw: "+", min: 1, max: 5 };
+  else if (ch === "{") {
     const close = src.indexOf("}", pos);
     if (close !== -1) {
       const inner = src.slice(pos + 1, close);
       const parts = inner.split(",");
       if (parts.length === 1) {
         const n = parseInt(parts[0]!, 10);
-        if (!isNaN(n)) return { raw: src.slice(pos, close + 1), min: n, max: n };
+        if (!isNaN(n)) q = { raw: src.slice(pos, close + 1), min: n, max: n };
       } else if (parts.length === 2) {
         const mn = parseInt(parts[0]!, 10);
         const mx = parts[1]!.trim() === "" ? mn + 5 : parseInt(parts[1]!, 10);
-        if (!isNaN(mn) && !isNaN(mx)) return { raw: src.slice(pos, close + 1), min: mn, max: mx };
+        if (!isNaN(mn) && !isNaN(mx)) q = { raw: src.slice(pos, close + 1), min: mn, max: mx };
       }
     }
   }
-  return { raw: "", min: 1, max: 1 };
+  if (!q) return { raw: "", min: 1, max: 1 };
+  // Consume optional lazy modifier '?' (treat as greedy — we always generate valid values)
+  if (src[pos + q.raw.length] === "?") q = { ...q, raw: q.raw + "?" };
+  return q;
 }
 
 function resolveQuantifier(q: Quantifier, rng: SeededRNG): number {
   return rng.nextInt(q.min, q.max);
 }
 
+/** Finds closing ] of a char class, respecting escapes. */
+function findCharClassClose(src: string, start: number): number {
+  for (let i = start; i < src.length; i++) {
+    if (src[i] === "\\") { i++; continue; }
+    if (src[i] === "]") return i;
+  }
+  return -1;
+}
+
 function findMatchingParen(src: string, openPos: number): number {
   let depth = 0;
   for (let i = openPos; i < src.length; i++) {
+    if (src[i] === "\\") { i++; continue; }
     if (src[i] === "(") depth++;
-    else if (src[i] === ")") {
-      depth--;
-      if (depth === 0) return i;
-    }
+    else if (src[i] === ")") { depth--; if (depth === 0) return i; }
   }
   return -1;
 }
@@ -293,6 +383,25 @@ export function generateString(
   if (c.email) return generateEmail(rng);
   if (c.url) return generateUrl(rng);
   if (c.datetime) return new Date(Date.now() - rng.nextInt(0, 365 * 24 * 3600 * 1000)).toISOString();
+  if (c.dateOnly) {
+    const d = new Date(Date.now() - rng.nextInt(0, 5 * 365 * 24 * 3600 * 1000));
+    return d.toISOString().split("T")[0]!;
+  }
+  if (c.timeOnly) {
+    const h = String(rng.nextInt(0, 23)).padStart(2, "0");
+    const m = String(rng.nextInt(0, 59)).padStart(2, "0");
+    const s = String(rng.nextInt(0, 59)).padStart(2, "0");
+    return `${h}:${m}:${s}`;
+  }
+  if (c.duration) {
+    const years = rng.nextInt(0, 3);
+    const months = rng.nextInt(0, 11);
+    const days = rng.nextInt(0, 30);
+    const hours = rng.nextInt(0, 23);
+    const mins = rng.nextInt(0, 59);
+    const secs = rng.nextInt(0, 59);
+    return `P${years}Y${months}M${days}DT${hours}H${mins}M${secs}S`;
+  }
   if (c.cuid) return `c${randomString(rng, 24, CHARS_LOWER + CHARS_DIGIT)}`;
   if (c.cuid2) return randomString(rng, 24, CHARS_LOWER + CHARS_DIGIT);
   if (c.ulid) {
@@ -300,12 +409,39 @@ export function generateString(
     const rand = randomString(rng, 16, "0123456789ABCDEFGHJKMNPQRSTVWXYZ");
     return time + rand;
   }
-  if (c.ip) {
+  if (c.nanoid) return randomString(rng, 21, CHARS_ALNUM + "_-");
+  if (c.jwt) {
+    // Structurally valid JWT (header.payload.signature in base64url)
+    const b64url = (s: string) => btoa(s).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
+    const header = b64url(JSON.stringify({ alg: "HS256", typ: "JWT" }));
+    const payload = b64url(JSON.stringify({ sub: uuidV4(rng), iat: Math.floor(Date.now() / 1000) }));
+    const sig = randomString(rng, 43, CHARS_ALNUM + "_-");
+    return `${header}.${payload}.${sig}`;
+  }
+  if (c.ipv4 || c.ip) {
     return `${rng.nextInt(1, 254)}.${rng.nextInt(0, 254)}.${rng.nextInt(0, 254)}.${rng.nextInt(1, 254)}`;
+  }
+  if (c.ipv6) {
+    const seg = () => randomString(rng, 4, CHARS_HEX);
+    return `${seg()}:${seg()}:${seg()}:${seg()}:${seg()}:${seg()}:${seg()}:${seg()}`;
+  }
+  if (c.cidr) {
+    const prefix = rng.nextInt(8, 30);
+    const host = `${rng.nextInt(1, 254)}.${rng.nextInt(0, 254)}.${rng.nextInt(0, 254)}.0`;
+    return `${host}/${prefix}`;
+  }
+  if (c.cidrv6) {
+    const seg = () => randomString(rng, 4, CHARS_HEX);
+    const prefix = rng.nextInt(32, 64);
+    return `${seg()}:${seg()}:${seg()}::/${prefix}`;
   }
   if (c.base64) {
     const raw = randomString(rng, rng.nextInt(8, 20), CHARS_ALNUM);
     return btoa(raw);
+  }
+  if (c.base64url) {
+    const raw = randomString(rng, rng.nextInt(8, 20), CHARS_ALNUM);
+    return btoa(raw).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
   }
   if (c.emoji) return rng.pick(["😀", "😂", "🎉", "🔥", "✨", "🎯", "🚀", "💡"]);
 
@@ -341,25 +477,96 @@ export function generateString(
 function applyStringSemantic(key: string, rng: SeededRNG): string | null {
   const k = key.toLowerCase();
 
+  // Identity / email
   if (/email/.test(k)) return generateEmail(rng);
+
+  // Names
   if (/firstname|first_name/.test(k)) return rng.pick(FIRST_NAMES);
-  if (/lastname|last_name/.test(k)) return rng.pick(LAST_NAMES);
+  if (/middlename|middle_name/.test(k)) return rng.pick(FIRST_NAMES);
+  if (/lastname|last_name|surname|familyname|family_name/.test(k)) return rng.pick(LAST_NAMES);
+  if (/fullname|full_name|displayname|display_name/.test(k)) return `${rng.pick(FIRST_NAMES)} ${rng.pick(LAST_NAMES)}`;
   if (/\bname\b/.test(k)) return `${rng.pick(FIRST_NAMES)} ${rng.pick(LAST_NAMES)}`;
-  if (/phone|phonenumber/.test(k)) return `+1-${rng.nextInt(200, 999)}-${rng.nextInt(100, 999)}-${rng.nextInt(1000, 9999)}`;
-  if (/\burl\b|website/.test(k)) return generateUrl(rng);
-  if (/avatar|avatarurl/.test(k)) return `https://avatars.example.com/${uuidV4(rng)}.png`;
+  if (/nickname|handle/.test(k)) return `${rng.pick(FIRST_NAMES).toLowerCase()}${rng.nextInt(1, 99)}`;
+  if (/username|login/.test(k)) return `${rng.pick(FIRST_NAMES).toLowerCase()}${rng.nextInt(1, 999)}`;
+  if (/password|passphrase/.test(k)) return randomString(rng, 12, CHARS_ALNUM + "!@#$%");
+
+  // Contact
+  if (/phone|phonenumber|phone_number|mobile|cellphone/.test(k)) return `+1-${rng.nextInt(200, 999)}-${rng.nextInt(100, 999)}-${rng.nextInt(1000, 9999)}`;
+
+  // URLs & images
+  if (/\burl\b|website|homepage|site/.test(k)) return generateUrl(rng);
+  if (/avatar|avatarurl|avatar_url/.test(k)) return `https://avatars.example.com/${uuidV4(rng)}.png`;
+  if (/imageurl|image_url|photo|thumbnail|thumbnailurl|thumbnail_url|coverurl|cover_url/.test(k)) return `https://images.example.com/${randomString(rng, 8, CHARS_ALNUM)}.jpg`;
+  if (/logourl|logo_url|logo/.test(k)) return `https://logos.example.com/${randomString(rng, 8, CHARS_ALNUM)}.svg`;
+
+  // Address fields
   if (/\baddress\b/.test(k)) return `${rng.nextInt(1, 9999)} ${rng.pick(STREET_NAMES)} ${rng.pick(STREET_TYPES)}`;
-  if (/\bcity\b/.test(k)) return rng.pick(CITIES);
+  if (/\bstreet\b/.test(k)) return `${rng.nextInt(1, 9999)} ${rng.pick(STREET_NAMES)} ${rng.pick(STREET_TYPES)}`;
+  if (/\bcity\b|town/.test(k)) return rng.pick(CITIES);
+  if (/\bstate\b|province|region/.test(k)) return rng.pick(STATES);
   if (/\bcountry\b/.test(k)) return rng.pick(COUNTRIES);
-  if (/zipcode|zip\b|postalcode/.test(k)) return `${rng.nextInt(10000, 99999)}`;
-  if (/\bcompany\b/.test(k)) return `${rng.pick(COMPANY_PREFIXES)} ${rng.pick(COMPANY_SUFFIXES)}`;
-  if (/description|bio/.test(k)) return rng.pick(LOREM_SENTENCES);
-  if (/\bid\b|uuid/.test(k)) return uuidV4(rng);
-  if (/username/.test(k)) return `${rng.pick(FIRST_NAMES).toLowerCase()}${rng.nextInt(1, 999)}`;
-  if (/password/.test(k)) return randomString(rng, 12, CHARS_ALNUM + "!@#$%");
-  if (/\btoken\b/.test(k)) return randomString(rng, 32, CHARS_HEX);
+  if (/countrycode|country_code/.test(k)) return rng.pick(COUNTRY_CODES);
+  if (/zipcode|zip\b|postalcode|postal_code/.test(k)) return `${rng.nextInt(10000, 99999)}`;
+
+  // Company / organization
+  if (/\bcompany\b|organization|organisation|employer/.test(k)) return `${rng.pick(COMPANY_PREFIXES)} ${rng.pick(COMPANY_SUFFIXES)}`;
+  if (/department|team\b/.test(k)) return rng.pick(DEPARTMENTS);
+  if (/jobtitle|job_title|role\b|position\b/.test(k)) return rng.pick(JOB_TITLES);
+
+  // Content
+  if (/description|bio\b|summary|about|overview/.test(k)) return rng.pick(LOREM_SENTENCES);
+  if (/\bcontent\b|body\b|message\b|note\b|notes\b|text\b/.test(k)) return rng.pick(LOREM_SENTENCES);
   if (/\btitle\b/.test(k)) return rng.pick(TITLES);
-  if (/\bdate\b|createdat|updatedat/.test(k)) return new Date(Date.now() - rng.nextInt(0, 365 * 24 * 3600 * 1000)).toISOString().split("T")[0]!;
+  if (/subject\b/.test(k)) return rng.pick(EMAIL_SUBJECTS);
+  if (/\btag\b|tags\b|label\b|labels\b|category\b|categories\b/.test(k)) return rng.pick(TAGS);
+  if (/\bslug\b/.test(k)) return rng.pick(TITLES).toLowerCase().replace(/[^a-z0-9]+/g, "-");
+
+  // IDs and tokens
+  if (/\bid\b|uuid/.test(k)) return uuidV4(rng);
+  if (/\btoken\b|accesstoken|access_token|refreshtoken|refresh_token/.test(k)) return randomString(rng, 32, CHARS_HEX);
+  if (/apikey|api_key|secretkey|secret_key|secret\b/.test(k)) return randomString(rng, 40, CHARS_HEX);
+  if (/\bcode\b|otp\b|verificationcode|verification_code/.test(k)) return String(rng.nextInt(100000, 999999));
+  if (/\bsku\b|barcode|ean\b/.test(k)) return `SKU-${randomString(rng, 6, CHARS_ALNUM).toUpperCase()}`;
+
+  // Locale / internationalization
+  if (/\blocale\b|lang\b|language\b/.test(k)) return rng.pick(LOCALES);
+  if (/timezone|time_zone/.test(k)) return rng.pick(TIMEZONES);
+  if (/currencycode|currency_code/.test(k)) return rng.pick(CURRENCY_CODES);
+  if (/\bcurrency\b/.test(k)) return rng.pick(CURRENCY_CODES);
+
+  // Appearance
+  if (/\bcolor\b|colour\b|hexcolor|hex_color/.test(k)) {
+    const hex = () => randomString(rng, 2, CHARS_HEX);
+    return `#${hex()}${hex()}${hex()}`;
+  }
+
+  // Status / type
+  if (/\bstatus\b/.test(k)) return rng.pick(["active", "inactive", "pending", "suspended", "archived"]);
+  if (/\btype\b|kind\b/.test(k)) return rng.pick(["primary", "secondary", "admin", "user", "guest"]);
+  if (/\bgender\b|sex\b/.test(k)) return rng.pick(["male", "female", "non-binary", "prefer not to say"]);
+
+  // File / MIME
+  if (/filename|file_name|filepath|file_path/.test(k)) return `${randomString(rng, 8, CHARS_ALNUM)}.${rng.pick(["pdf", "png", "jpg", "csv", "json"])}`;
+  if (/mimetype|mime_type|contenttype|content_type/.test(k)) return rng.pick(MIME_TYPES);
+  if (/\bextension\b/.test(k)) return rng.pick(["pdf", "png", "jpg", "csv", "json", "xml", "zip"]);
+
+  // Network
+  if (/ipaddress|ip_address/.test(k)) return `${rng.nextInt(1, 254)}.${rng.nextInt(0, 254)}.${rng.nextInt(0, 254)}.${rng.nextInt(1, 254)}`;
+  if (/\bhost\b|hostname/.test(k)) return `${rng.pick(["api", "app", "cdn", "mail", "dev"])}.example.com`;
+
+  // Dates (as strings, not Date objects)
+  if (/\bdate\b|createdat|created_at|updatedat|updated_at|deletedat|deleted_at|publishedat|published_at/.test(k)) {
+    return new Date(Date.now() - rng.nextInt(0, 365 * 24 * 3600 * 1000)).toISOString().split("T")[0]!;
+  }
+  if (/birthdate|birth_date|dob\b|dateofbirth|date_of_birth/.test(k)) {
+    const year = rng.nextInt(1960, 2000);
+    const month = String(rng.nextInt(1, 12)).padStart(2, "0");
+    const day = String(rng.nextInt(1, 28)).padStart(2, "0");
+    return `${year}-${month}-${day}`;
+  }
+
+  // Version
+  if (/\bversion\b/.test(k)) return `${rng.nextInt(0, 5)}.${rng.nextInt(0, 20)}.${rng.nextInt(0, 99)}`;
 
   return null;
 }
@@ -487,31 +694,74 @@ function applyNumericSemantic(
   const k = key.toLowerCase();
   const isInt = c.int ?? false;
 
+  // Only clamp against explicit user-set constraints, not the synthetic defaults.
+  const hasExplicit =
+    c.min !== undefined || c.max !== undefined ||
+    c.gte !== undefined || c.lte !== undefined ||
+    c.gt !== undefined || c.lt !== undefined ||
+    c.positive || c.negative || c.nonnegative || c.nonpositive;
+
   const clamp = (v: number) => {
+    if (!hasExplicit) return v;
     const lo = resolveNumberMin(c);
     const hi = resolveNumberMax(c);
     return Math.min(Math.max(v, lo), hi);
   };
+  const int = (min: number, max: number) => clamp(rng.nextInt(min, max));
+  const float = (min: number, max: number, decimals = 2) =>
+    clamp(isInt ? rng.nextInt(Math.ceil(min), Math.floor(max)) : parseFloat(rng.nextFloat(min, max).toFixed(decimals)));
 
-  if (/\bage\b/.test(k)) {
-    const v = rng.nextInt(18, 80);
-    return clamp(v);
-  }
-  if (/price|amount|cost/.test(k)) {
-    const v = parseFloat(rng.nextFloat(0.01, 9999.99).toFixed(2));
-    return clamp(isInt ? Math.round(v) : v);
-  }
-  if (/count|quantity/.test(k)) {
-    return clamp(rng.nextInt(1, 100));
-  }
-  if (/rating|score/.test(k)) {
-    const v = parseFloat(rng.nextFloat(0, 5).toFixed(1));
-    return clamp(v);
-  }
-  if (/percentage|percent/.test(k)) {
-    const v = parseFloat(rng.nextFloat(0, 100).toFixed(2));
-    return clamp(isInt ? Math.round(v) : v);
-  }
+  // Human attributes
+  if (/\bage\b/.test(k)) return int(18, 80);
+
+  // Money
+  if (/price|amount|cost|total\b|subtotal|balance|salary|budget|revenue/.test(k)) return float(0.01, 9999.99);
+  if (/discount|tax|fee/.test(k)) return float(0, 500, 2);
+
+  // Counts
+  if (/\bcount\b|quantity|qty\b/.test(k)) return int(1, 100);
+  if (/total(?:count|items|records|results)|totalcount/.test(k)) return int(0, 10000);
+  if (/\bsize\b/.test(k)) return int(1, 500);
+  if (/\blimit\b|pagesize|page_size|perpage|per_page/.test(k)) return int(10, 100);
+  if (/\boffset\b|skip\b/.test(k)) return int(0, 1000);
+  if (/\bpage\b|pagenumber|page_number/.test(k)) return int(1, 100);
+  if (/\bindex\b|\border\b|position\b|rank\b/.test(k)) return int(0, 999);
+
+  // Ratings / scores
+  if (/rating\b|score\b/.test(k)) return float(0, 5, 1);
+  if (/priority\b|importance\b/.test(k)) return int(1, 10);
+  if (/\blevel\b/.test(k)) return int(1, 10);
+
+  // Percentages
+  if (/percentage|percent\b/.test(k)) return float(0, 100, 2);
+
+  // Dimensions
+  if (/\bwidth\b/.test(k)) return int(100, 3840);
+  if (/\bheight\b/.test(k)) return int(100, 2160);
+  if (/\bweight\b/.test(k)) return float(0.1, 200, 2);
+
+  // Geo
+  if (/latitude|lat\b/.test(k)) return float(-90, 90, 6);
+  if (/longitude|lng\b|lon\b/.test(k)) return float(-180, 180, 6);
+
+  // Date parts
+  if (/\byear\b/.test(k)) return int(2000, 2030);
+  if (/\bmonth\b/.test(k)) return int(1, 12);
+  if (/\bday\b/.test(k)) return int(1, 28);
+  if (/\bhour\b/.test(k)) return int(0, 23);
+  if (/\bminute\b/.test(k)) return int(0, 59);
+  if (/\bsecond\b/.test(k)) return int(0, 59);
+
+  // Time spans
+  if (/duration\b/.test(k)) return int(1, 3600);
+  if (/timeout\b/.test(k)) return int(100, 30000);
+  if (/interval\b/.test(k)) return int(1, 60);
+
+  // Network
+  if (/\bport\b/.test(k)) return int(1024, 65535);
+
+  // Version
+  if (/\bversion\b|major\b|minor\b|patch\b/.test(k)) return int(0, 99);
 
   return null;
 }
@@ -614,19 +864,86 @@ export function generateDate(c: DateConstraints, rng: SeededRNG, path: string[])
 // Fixtures / word lists
 // ---------------------------------------------------------------------------
 
-const FIRST_NAMES = ["Alice", "Bob", "Carol", "Dave", "Eve", "Frank", "Grace", "Henry", "Iris", "Jack"];
-const LAST_NAMES = ["Smith", "Johnson", "Williams", "Brown", "Jones", "Garcia", "Miller", "Davis", "Wilson", "Moore"];
-const STREET_NAMES = ["Oak", "Maple", "Pine", "Elm", "Cedar", "Main", "Park", "Lake", "Hill", "River"];
-const STREET_TYPES = ["St", "Ave", "Blvd", "Dr", "Ln", "Rd", "Way", "Ct"];
-const CITIES = ["Springfield", "Shelbyville", "Riverdale", "Lakewood", "Hillcrest", "Maplewood", "Fairview"];
-const COUNTRIES = ["United States", "Canada", "United Kingdom", "Australia", "Germany", "France", "Japan"];
-const COMPANY_PREFIXES = ["Acme", "Globex", "Initech", "Umbrella", "Stark", "Wayne", "Hooli"];
-const COMPANY_SUFFIXES = ["Corp", "Inc", "LLC", "Industries", "Technologies", "Solutions", "Systems"];
+const FIRST_NAMES = [
+  "Alice", "Bob", "Carol", "Dave", "Eve", "Frank", "Grace", "Henry", "Iris", "Jack",
+  "Karen", "Leo", "Maya", "Noah", "Olivia", "Paul", "Quinn", "Rachel", "Sam", "Tina",
+  "Uma", "Victor", "Wendy", "Xander", "Yara", "Zoe", "Aaron", "Beth", "Carlos", "Diana",
+];
+const LAST_NAMES = [
+  "Smith", "Johnson", "Williams", "Brown", "Jones", "Garcia", "Miller", "Davis", "Wilson", "Moore",
+  "Taylor", "Anderson", "Thomas", "Jackson", "White", "Harris", "Martin", "Thompson", "Young", "Hall",
+  "Lee", "Walker", "Allen", "King", "Wright", "Scott", "Torres", "Nguyen", "Hill", "Flores",
+];
+const STREET_NAMES = [
+  "Oak", "Maple", "Pine", "Elm", "Cedar", "Main", "Park", "Lake", "Hill", "River",
+  "Sunset", "Willow", "Highland", "Meadow", "Forest", "Spring", "Valley", "Ridge", "Birch", "Ash",
+];
+const STREET_TYPES = ["St", "Ave", "Blvd", "Dr", "Ln", "Rd", "Way", "Ct", "Pl", "Terrace"];
+const CITIES = [
+  "Springfield", "Shelbyville", "Riverdale", "Lakewood", "Hillcrest", "Maplewood", "Fairview",
+  "Brookside", "Greenville", "Ashford", "Westfield", "Eastport", "Northgate", "Southbury",
+  "Denver", "Portland", "Austin", "Nashville", "Charlotte", "Phoenix",
+];
+const STATES = [
+  "California", "Texas", "Florida", "New York", "Pennsylvania", "Illinois", "Ohio",
+  "Georgia", "North Carolina", "Michigan", "Virginia", "Washington", "Colorado", "Arizona",
+  "Ontario", "British Columbia", "Quebec", "Bavaria", "Île-de-France",
+];
+const COUNTRIES = [
+  "United States", "Canada", "United Kingdom", "Australia", "Germany",
+  "France", "Japan", "Spain", "Italy", "Brazil", "India", "Mexico",
+  "Netherlands", "Sweden", "South Korea", "Singapore", "New Zealand",
+];
+const COUNTRY_CODES = ["US", "CA", "GB", "AU", "DE", "FR", "JP", "ES", "IT", "BR", "IN", "MX", "NL", "SE", "KR", "SG", "NZ"];
+const COMPANY_PREFIXES = ["Acme", "Globex", "Initech", "Umbrella", "Stark", "Wayne", "Hooli", "Pied Piper", "Dunder Mifflin", "Vehement Capital"];
+const COMPANY_SUFFIXES = ["Corp", "Inc", "LLC", "Industries", "Technologies", "Solutions", "Systems", "Group", "Labs", "Digital"];
+const DEPARTMENTS = ["Engineering", "Product", "Design", "Marketing", "Sales", "Finance", "HR", "Legal", "Operations", "Support"];
+const JOB_TITLES = [
+  "Software Engineer", "Product Manager", "Designer", "Marketing Manager", "Sales Representative",
+  "Data Scientist", "DevOps Engineer", "QA Engineer", "Technical Writer", "Engineering Manager",
+  "Director of Engineering", "VP of Product", "Chief Technology Officer", "Frontend Developer", "Backend Developer",
+];
 const LOREM_SENTENCES = [
   "Lorem ipsum dolor sit amet, consectetur adipiscing elit.",
   "Sed do eiusmod tempor incididunt ut labore et dolore magna aliqua.",
   "Ut enim ad minim veniam, quis nostrud exercitation ullamco.",
   "Duis aute irure dolor in reprehenderit in voluptate velit esse.",
   "Excepteur sint occaecat cupidatat non proident sunt in culpa.",
+  "Pellentesque habitant morbi tristique senectus et netus et malesuada.",
+  "Integer nec odio, praesent libero, sed cursus ante dapibus diam.",
+  "This feature enables seamless integration with existing workflows.",
+  "Users can configure advanced settings to match their specific requirements.",
+  "The system automatically handles retries and error recovery for reliability.",
 ];
-const TITLES = ["Introduction to Testing", "Advanced TypeScript", "The Art of Mocking", "Schema-Driven Development"];
+const TITLES = [
+  "Introduction to Testing", "Advanced TypeScript", "The Art of Mocking", "Schema-Driven Development",
+  "Getting Started with Zod", "Building Reliable APIs", "Modern Web Architecture", "Clean Code Principles",
+  "Performance Optimization Guide", "Security Best Practices", "Database Design Patterns", "CI/CD Handbook",
+];
+const EMAIL_SUBJECTS = [
+  "Action Required: Please review your account",
+  "Your order has been shipped",
+  "Welcome to the platform!",
+  "Password reset request",
+  "Weekly digest for your team",
+  "New comment on your post",
+  "Invitation to collaborate",
+  "Meeting reminder: Tomorrow at 10am",
+];
+const TAGS = [
+  "javascript", "typescript", "react", "node", "api", "frontend", "backend", "devops",
+  "testing", "performance", "security", "ux", "design", "mobile", "cloud", "database",
+];
+const LOCALES = ["en-US", "en-GB", "fr-FR", "de-DE", "es-ES", "pt-BR", "ja-JP", "ko-KR", "zh-CN", "nl-NL", "sv-SE", "it-IT"];
+const TIMEZONES = [
+  "America/New_York", "America/Chicago", "America/Denver", "America/Los_Angeles",
+  "America/Sao_Paulo", "Europe/London", "Europe/Paris", "Europe/Berlin",
+  "Asia/Tokyo", "Asia/Shanghai", "Asia/Singapore", "Australia/Sydney",
+];
+const CURRENCY_CODES = ["USD", "EUR", "GBP", "CAD", "AUD", "JPY", "CHF", "CNY", "INR", "BRL", "MXN", "KRW"];
+const MIME_TYPES = [
+  "application/json", "application/pdf", "application/zip", "application/octet-stream",
+  "text/html", "text/plain", "text/csv",
+  "image/jpeg", "image/png", "image/gif", "image/webp", "image/svg+xml",
+  "audio/mpeg", "video/mp4",
+];

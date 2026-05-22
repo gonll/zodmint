@@ -4,55 +4,37 @@ import type { GenerationContext } from "./context.js";
 import type { GlobalConfig, MockOptions } from "./config.js";
 import { dispatch } from "./generators/zod-types.js";
 import { deepMerge } from "./merge.js";
+import { typeName, rawDef, isV4 } from "./compat.js";
 
 /**
  * Returns true if the schema (or any nested schema) contains a transform.
  * Used to gate override support.
  */
 export function schemaHasTransform(schema: z.ZodTypeAny): boolean {
-  const def = schema._def as z.ZodTypeDef & {
-    typeName: z.ZodFirstPartyTypeKind;
-    effect?: { type: string };
-    innerType?: z.ZodTypeAny;
-    schema?: z.ZodTypeAny;
-    type?: z.ZodTypeAny;
-    left?: z.ZodTypeAny;
-    right?: z.ZodTypeAny;
-    options?: z.ZodTypeAny[];
-    items?: z.ZodTypeAny[];
-    valueType?: z.ZodTypeAny;
-    keyType?: z.ZodTypeAny;
-  };
+  const tn = typeName(schema);
 
-  if (def.typeName === z.ZodFirstPartyTypeKind.ZodEffects) {
-    if (def.effect?.type === "transform") return true;
-    if (def.effect?.type === "preprocess") return true;
-    // recursively check inner
-    if (def.schema) return schemaHasTransform(def.schema);
+  // v4: ZodPipe always contains a transform
+  if (tn === "pipe") return true;
+  if (tn === "transform") return true;
+
+  // v3: ZodEffects with transform or preprocess effect
+  if (tn === "effects") {
+    const def = rawDef(schema);
+    if ((def.effect as { type?: string } | undefined)?.type === "transform") return true;
+    if ((def.effect as { type?: string } | undefined)?.type === "preprocess") return true;
+    if (def.schema) return schemaHasTransform(def.schema as z.ZodTypeAny);
   }
 
-  // Recurse into wrapper types
-  const inner =
-    def.innerType ??
-    def.schema ??
-    def.type;
-
-  if (inner) return schemaHasTransform(inner);
-
-  // Union / discriminated union options
-  if (def.options) {
-    return (def.options as z.ZodTypeAny[]).some(schemaHasTransform);
+  // Recurse into wrapper types using rawDef
+  const def = rawDef(schema);
+  const inner = (def.innerType ?? def.schema ?? (!isV4(schema) ? def.type : undefined)) as z.ZodTypeAny | undefined;
+  if (inner && typeof inner === "object" && ("_def" in inner || "_zod" in inner)) {
+    return schemaHasTransform(inner);
   }
 
-  // Intersection
-  if (def.left && def.right) {
-    return schemaHasTransform(def.left) || schemaHasTransform(def.right);
-  }
-
-  // Tuple items
-  if (def.items) {
-    return (def.items as z.ZodTypeAny[]).some(schemaHasTransform);
-  }
+  if (def.options) return (def.options as z.ZodTypeAny[]).some(schemaHasTransform);
+  if (def.left && def.right) return schemaHasTransform(def.left as z.ZodTypeAny) || schemaHasTransform(def.right as z.ZodTypeAny);
+  if (def.items) return (def.items as z.ZodTypeAny[]).some(schemaHasTransform);
 
   return false;
 }
@@ -110,7 +92,10 @@ export function runPipeline<S extends z.ZodTypeAny>(
     // Step 5: Validate final overridden result
     const revalidated = schema.safeParse(result);
     if (!revalidated.success) {
-      const firstError = revalidated.error.errors[0];
+      // v4 uses .issues, v3 uses .errors (which is an alias for .issues in v3)
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const issueList: any[] = (revalidated.error as any).issues ?? (revalidated.error as any).errors ?? [];
+      const firstError = issueList[0];
       const errorPath = firstError?.path?.join(".") ?? "<root>";
       throw new ZodForgeError(
         `Override at "${errorPath}" failed: ${firstError?.message ?? revalidated.error.message}`,

@@ -39,7 +39,7 @@ zod is a peer dependency, so make sure it's already in your project:
 npm install zod
 ```
 
-Requires zod `^3.23.0`.
+Requires zod `>=3.23.0`. Zod v3 and v4 are both supported.
 
 ---
 
@@ -166,11 +166,11 @@ Semantic generators are constraint-aware. If a field named `age` also has `.max(
 
 ### String field patterns
 
-`email` produces a valid email. `firstName` and `first_name` produce a first name. `lastName` and `last_name` produce a last name. A standalone `name` field produces a full name. `phone` and `phoneNumber` produce a phone number. `url` and `website` produce a valid URL. `avatar` and `avatarUrl` produce an image URL. `address` produces a street address. `city`, `country`, `zipCode`, `zip`, and `postalCode` produce what you'd expect. `company` produces a company name. `description` and `bio` produce a lorem ipsum sentence. `id` and `uuid` produce a UUID v4. `username` produces a username. `password` produces a 12-character random string. `token` produces 32 hex characters. `title` produces a short title. `date`, `createdAt`, and `updatedAt` produce an ISO date string.
+Names: `firstName` / `first_name`, `lastName` / `last_name` / `surname`, `fullName` / `full_name` / `displayName`, `middleName`, `nickname` / `handle`. Contact: `email`, `phone` / `mobile` / `phoneNumber`. Web: `url` / `website`, `avatar` / `avatarUrl`, `imageUrl` / `photo` / `thumbnail`, `logoUrl`. Address: `address` / `street`, `city`, `state` / `province` / `region`, `country`, `countryCode`, `zipCode` / `zip` / `postalCode`. Identity: `id` / `uuid`, `username` / `login`, `password`, `token` / `accessToken`, `apiKey` / `secret`, `code` / `otp`. Company: `company` / `organization`, `department`, `jobTitle` / `role` / `position`. Content: `title`, `subject`, `description` / `bio` / `summary`, `content` / `body` / `message` / `note`, `tag` / `label` / `category`, `slug`. Locale: `locale` / `language`, `timezone`, `currency` / `currencyCode`. Appearance: `color` / `hexColor`. Status: `status`, `type` / `kind`, `gender`. Files: `filename` / `filepath`, `mimeType` / `contentType`, `extension`. Dates (as strings): `date` / `createdAt` / `updatedAt` / `publishedAt`, `birthDate` / `dob`. Other: `version`, `sku` / `barcode`, `ipAddress`, `host` / `hostname`.
 
 ### Numeric field patterns
 
-`age` produces an integer between 18 and 80. `price`, `amount`, and `cost` produce a float between 0.01 and 9999.99. `count` and `quantity` produce an integer between 1 and 100. `rating` and `score` produce a float between 0.0 and 5.0. `percentage` and `percent` produce a float between 0.0 and 100.0.
+`age` (18–80), `price` / `amount` / `cost` / `salary` (float), `count` / `quantity` / `size` (int), `rating` / `score` (0–5 float), `percentage` / `percent` (0–100), `latitude` / `lat` (-90–90), `longitude` / `lng` (-180–180), `year` (2000–2030), `month` (1–12), `day` (1–28), `hour` (0–23), `minute` / `second` (0–59), `width` / `height` (pixels), `weight`, `limit` / `pageSize` / `perPage`, `page` / `pageNumber`, `offset` / `skip`, `totalCount`, `priority` / `importance` (1–10), `port` (1024–65535), `duration` / `timeout`, `version` / `major` / `minor` / `patch`. Semantic values respect explicit schema constraints — a `latitude` field with `.min(0)` clamps to non-negative.
 
 ---
 
@@ -200,7 +200,7 @@ Matchers are tested in order and the first match wins.
 
 zod-forge handles all standard Zod constraints. Here's the full picture:
 
-**Strings:** `.min(n)` produces at least n characters. `.max(n)` caps at n characters. `.length(n)` produces exactly n characters. `.email()` produces a valid email. `.url()` produces a valid URL. `.uuid()` produces a UUID v4. `.startsWith(s)` and `.endsWith(s)` are respected. `.cuid()`, `.cuid2()`, `.ulid()`, `.datetime()`, `.ip()`, `.emoji()`, and `.base64()` all produce format-correct values.
+**Strings:** `.min(n)` produces at least n characters. `.max(n)` caps at n characters. `.length(n)` produces exactly n characters. `.email()` produces a valid email. `.url()` produces a valid URL. `.uuid()` produces a UUID v4. `.startsWith(s)` and `.endsWith(s)` are respected. `.cuid()`, `.cuid2()`, `.ulid()`, `.nanoid()`, `.jwt()`, `.datetime()`, `.date()` (YYYY-MM-DD), `.time()` (HH:MM:SS), `.duration()` (ISO 8601), `.ip()` / `.ipv4()` / `.ipv6()`, `.cidrv4()` / `.cidrv6()`, `.emoji()`, `.base64()`, and `.base64url()` all produce format-correct values.
 
 **Numbers:** `.min(n)` / `.gte(n)` and `.max(n)` / `.lte(n)` set the range. `.gt(n)` and `.lt(n)` set exclusive bounds. `.int()` produces integers. `.positive()` ensures the result is greater than zero. `.negative()` ensures it's less than zero. `.nonnegative()` and `.nonpositive()` cover the boundary-inclusive variants. `.multipleOf(n)` produces a multiple of n.
 
@@ -216,21 +216,26 @@ Unsatisfiable combinations — `.min(10).max(5)`, `.positive().negative()`, `.em
 
 ## Regex Support
 
-`z.string().regex(r)` is supported for simple patterns. The following constructs work:
+`z.string().regex(r)` supports a broad subset of patterns — enough to cover the majority of real-world use cases:
 
-Character classes like `[a-z]` or `[A-Z0-9]`. Quantifiers `+`, `*`, `?`, `{n}`, and `{n,m}`. Anchors `^` and `$`. Fixed alternation in groups like `(foo|bar|baz)`.
+**Supported:** literals, character classes `[a-z]` / `[A-Z0-9_]`, negated classes `[^aeiou]`, shorthand classes `\d` / `\w` / `\s` and their inverses `\D` / `\W` / `\S`, word boundaries `\b` / `\B` (zero-width, no output), the dot `.` (any printable char), alternation `(foo|bar|baz)` and top-level `cat|dog|fish`, non-capturing groups `(?:...)`, quantifiers `?` / `*` / `+` / `{n}` / `{n,m}`, lazy quantifiers (`+?`, `*?`), anchors `^` / `$`.
 
-Complex patterns throw `ZodForgeError [REGEX_UNSUPPORTED]`. This includes `\d`, `\w`, `\s` and their inverses, lookahead and lookbehind, lazy quantifiers, negated character classes, the dot `.`, and top-level alternation without enclosing parens.
+```typescript
+mock(z.string().regex(/^\d{5}$/))          // "94103"
+mock(z.string().regex(/^\d{3}-\d{4}$/))   // "415-8271"
+mock(z.string().regex(/^\d+\.\d{2}$/))    // "42.99"
+mock(z.string().regex(/^[A-Z]{2}\d{4}$/)) // "BC1947"
+mock(z.string().regex(/^#[0-9a-fA-F]{6}$/)) // "#3af1c8"
+```
 
-If you need to generate values for a complex regex, use a custom matcher instead:
+**Still throws `REGEX_UNSUPPORTED`:** lookahead / lookbehind (`(?=...)`, `(?!...)`), backreferences (`\1`), named capture groups (`(?<name>...)`), unicode properties (`\p{...}`), possessive quantifiers (`++`).
+
+For genuinely unsupported patterns, register a custom matcher instead:
 
 ```typescript
 configure({
   matchers: [
-    {
-      pattern: /postalCode/i,
-      generate: () => `${String(Math.floor(Math.random() * 90000) + 10000)}`,
-    },
+    { pattern: /postalCode/i, generate: () => String(Math.floor(Math.random() * 90000) + 10000) },
   ],
 })
 ```
@@ -277,11 +282,13 @@ zod-forge handles the full Zod type system with a few noted exceptions.
 
 `z.lazy(T)` recurses up to `maxDepth`. Optional objects return `undefined`, arrays return `[]`, and required objects throw `MAX_DEPTH_EXCEEDED`.
 
-`z.readonly(T)` ignores the readonly wrapper and generates from the inner type. `z.string().brand<B>()` and `z.number().brand<B>()` ignore the brand and generate the underlying type. `z.coerce.string()`, `z.coerce.number()`, `z.coerce.boolean()`, and `z.coerce.date()` generate the target type directly, bypassing coercion.
+`z.readonly(T)` ignores the readonly wrapper and generates from the inner type. `z.string().brand<B>()` and `z.number().brand<B>()` ignore the brand and generate the underlying type.
+
+`z.coerce.string()`, `z.coerce.number()`, `z.coerce.boolean()`, `z.coerce.bigint()`, and `z.coerce.date()` are fully supported — zod-forge generates the target type directly. The coerce transform is a no-op on a value that's already the correct native type, so `safeParse` always succeeds.
 
 `z.unknown()` and `z.any()` produce a random primitive (string, number, or boolean). `z.nan()` returns `NaN` — see the warning below. `z.void()` returns `undefined`.
 
-`z.string().transform(...)` is supported; the transform runs once via `safeParse`. `z.preprocess()`, `z.pipe()`, `z.promise()`, `z.symbol()`, `z.never()`, `z.refine()`, `z.superRefine()`, and `z.custom()` all throw `UNSUPPORTED_SCHEMA`.
+`z.string().transform(...)` is supported; the transform runs once via `safeParse`. `z.preprocess()` with a non-primitive output, `z.pipe()` (v3), `z.promise()`, `z.symbol()`, `z.never()`, `z.refine()`, `z.superRefine()`, and `z.custom()` all throw `UNSUPPORTED_SCHEMA`.
 
 ---
 
@@ -308,7 +315,7 @@ try {
 }
 ```
 
-`UNSUPPORTED_SCHEMA` is thrown for `z.never()`, `z.refine()`, `z.preprocess()`, `z.pipe()`, `z.promise()`, `z.symbol()`, `z.custom()`, and overrides on transform schemas.
+`UNSUPPORTED_SCHEMA` is thrown for `z.never()`, `z.refine()`, `z.preprocess()` (with non-primitive output), `z.pipe()` (v3), `z.promise()`, `z.symbol()`, `z.custom()`, and overrides on transform schemas.
 
 `UNSUPPORTED_MODE` is thrown when `mode` is `"edge"` or `"random"` — both are coming in v2.
 

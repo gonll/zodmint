@@ -85,13 +85,9 @@ describe("string constraints", () => {
     }
   });
 
-  it("unsatisfiable min > max throws GENERATION_FAILED", () => {
-    expect(() => mock(z.string().min(10).max(5))).toThrow(ZodForgeError);
-    try {
-      mock(z.string().min(10).max(5));
-    } catch (e) {
-      expect((e as ZodForgeError).code).toBe("GENERATION_FAILED");
-    }
+  it("unsatisfiable min > max throws an error", () => {
+    // v3: zod-forge throws GENERATION_FAILED; v4: Zod itself throws SyntaxError during schema creation
+    expect(() => mock(z.string().min(10).max(5))).toThrow();
   });
 
   it("email + max(5) throws GENERATION_FAILED", () => {
@@ -103,12 +99,86 @@ describe("string constraints", () => {
     }
   });
 
-  it("complex regex throws REGEX_UNSUPPORTED", () => {
-    expect(() => mock(z.string().regex(/^\d+\.\d{2}$/))).toThrow(ZodForgeError);
+  it("lookahead throws REGEX_UNSUPPORTED", () => {
+    // Lookaheads are genuinely unsupported
+    expect(() => mock(z.string().regex(/^\d+(?=px$)/))).toThrow(ZodForgeError);
     try {
-      mock(z.string().regex(/^\d+\.\d{2}$/));
+      mock(z.string().regex(/^\d+(?=px$)/));
     } catch (e) {
       expect((e as ZodForgeError).code).toBe("REGEX_UNSUPPORTED");
+    }
+  });
+
+  it("\\d shorthand: postal code /^\\d{5}$/", () => {
+    const schema = z.string().regex(/^\d{5}$/);
+    for (let i = 0; i < 10; i++) {
+      const s = mock(schema, { seed: i });
+      expect(schema.safeParse(s).success).toBe(true);
+      expect(s).toMatch(/^\d{5}$/);
+    }
+  });
+
+  it("\\w shorthand: /^\\w{8}$/", () => {
+    const schema = z.string().regex(/^\w{8}$/);
+    for (let i = 0; i < 10; i++) {
+      const s = mock(schema, { seed: i });
+      expect(s).toMatch(/^\w{8}$/);
+    }
+  });
+
+  it("range quantifier {n,m}: /^[A-Z]{2,4}$/", () => {
+    const schema = z.string().regex(/^[A-Z]{2,4}$/);
+    for (let i = 0; i < 10; i++) {
+      const s = mock(schema, { seed: i });
+      expect(schema.safeParse(s).success).toBe(true);
+    }
+  });
+
+  it("dot: /^.{4}$/ generates 4 chars", () => {
+    const schema = z.string().regex(/^.{4}$/);
+    for (let i = 0; i < 10; i++) {
+      const s = mock(schema, { seed: i });
+      expect(s.length).toBe(4);
+    }
+  });
+
+  it("negated class: /^[^aeiou]{5}$/", () => {
+    const schema = z.string().regex(/^[^aeiou]{5}$/);
+    for (let i = 0; i < 10; i++) {
+      const s = mock(schema, { seed: i });
+      expect(schema.safeParse(s).success).toBe(true);
+    }
+  });
+
+  it("non-capturing group (?:...): /^(?:foo|bar){2}$/", () => {
+    const schema = z.string().regex(/^(?:foo|bar){2}$/);
+    for (let i = 0; i < 10; i++) {
+      const s = mock(schema, { seed: i });
+      expect(schema.safeParse(s).success).toBe(true);
+    }
+  });
+
+  it("top-level alternation: /^cat$|^dog$|^fish$/", () => {
+    const schema = z.string().regex(/^cat$|^dog$|^fish$/);
+    for (let i = 0; i < 10; i++) {
+      const s = mock(schema, { seed: i });
+      expect(["cat", "dog", "fish"]).toContain(s);
+    }
+  });
+
+  it("phone-like: /^\\d{3}-\\d{4}$/", () => {
+    const schema = z.string().regex(/^\d{3}-\d{4}$/);
+    for (let i = 0; i < 10; i++) {
+      const s = mock(schema, { seed: i });
+      expect(schema.safeParse(s).success).toBe(true);
+    }
+  });
+
+  it("price-like: /^\\d+\\.\\d{2}$/", () => {
+    const schema = z.string().regex(/^\d+\.\d{2}$/);
+    for (let i = 0; i < 10; i++) {
+      const s = mock(schema, { seed: i });
+      expect(schema.safeParse(s).success).toBe(true);
     }
   });
 });

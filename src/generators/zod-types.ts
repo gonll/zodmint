@@ -18,6 +18,33 @@ import {
 } from "./constraints.js";
 import { leafKey } from "./semantic.js";
 import { applyCustomMatchers } from "./matchers.js";
+import {
+  isV4,
+  rawDef,
+  typeName,
+  getChecks,
+  getInnerType,
+  getShape,
+  getLiteralValue,
+  getUnionOptions,
+  getArrayElement,
+  getArrayBounds,
+  getLazyGetter,
+  getTupleItems,
+  getRecordKeyType,
+  getValueType,
+  getMapKeyType,
+  getIntersectionParts,
+  getDefaultValue,
+  getEnumValues,
+  getNativeEnumObject,
+  getBrandedInner,
+  getEffectsInfo,
+  getPipeInputSchema,
+  getPipeOutputSchema,
+  hasRefinementChecks,
+  normalizeV4Checks,
+} from "../compat.js";
 
 // ---------------------------------------------------------------------------
 // Main dispatcher
@@ -28,10 +55,7 @@ export function generateValue(
   ctx: GenerationContext,
   config: GlobalConfig,
 ): unknown {
-  // 1. Custom matchers take highest priority (after format constraints)
   const leaf = leafKey(ctx.path);
-
-  // Unwrap common wrappers first so inner type determines dispatch
   return dispatch(schema, ctx, config, leaf);
 }
 
@@ -41,117 +65,135 @@ function dispatch(
   config: GlobalConfig,
   leaf: string | null,
 ): unknown {
-  const def = schema._def as z.ZodTypeDef & { typeName: z.ZodFirstPartyTypeKind };
+  // v4: check for embedded refinement checks (z.refine() becomes a custom check)
+  if (hasRefinementChecks(schema)) {
+    throw new ZodForgeError(
+      `z.refine()/z.superRefine() is not supported at ${formatPath(ctx.path)}. ` +
+        `zod-forge cannot satisfy arbitrary refinement predicates.`,
+      "UNSUPPORTED_SCHEMA",
+    );
+  }
 
-  switch (def.typeName) {
-    case z.ZodFirstPartyTypeKind.ZodString:
-      return dispatchString(schema as z.ZodString, ctx, config, leaf);
+  const tn = typeName(schema);
 
-    case z.ZodFirstPartyTypeKind.ZodNumber:
-      return dispatchNumber(schema as z.ZodNumber, ctx, config, leaf);
+  switch (tn) {
+    case "string":
+      return dispatchString(schema, ctx, config, leaf);
 
-    case z.ZodFirstPartyTypeKind.ZodBigInt:
-      return dispatchBigInt(schema as z.ZodBigInt, ctx, config);
+    case "number":
+      return dispatchNumber(schema, ctx, config, leaf);
 
-    case z.ZodFirstPartyTypeKind.ZodBoolean:
+    case "bigint":
+      return dispatchBigInt(schema, ctx, config);
+
+    case "boolean":
       return ctx.rng.bool();
 
-    case z.ZodFirstPartyTypeKind.ZodDate:
-      return dispatchDate(schema as z.ZodDate, ctx, config);
+    case "date":
+      return dispatchDate(schema, ctx, config);
 
-    case z.ZodFirstPartyTypeKind.ZodUndefined:
+    case "undefined":
       return undefined;
 
-    case z.ZodFirstPartyTypeKind.ZodNull:
+    case "null":
       return null;
 
-    case z.ZodFirstPartyTypeKind.ZodAny:
-    case z.ZodFirstPartyTypeKind.ZodUnknown:
+    case "any":
+    case "unknown":
       return ctx.rng.pick([
         ctx.rng.next().toString(36),
         ctx.rng.nextInt(-1000, 1000),
         ctx.rng.bool(),
       ]);
 
-    case z.ZodFirstPartyTypeKind.ZodNever:
+    case "never":
       throw new ZodForgeError(
         `z.never() encountered at ${formatPath(ctx.path)}. This type has no valid value.`,
         "UNSUPPORTED_SCHEMA",
       );
 
-    case z.ZodFirstPartyTypeKind.ZodNaN:
+    case "nan":
       return NaN;
 
-    case z.ZodFirstPartyTypeKind.ZodLiteral:
-      return (def as z.ZodLiteralDef).value;
+    case "literal":
+      return getLiteralValue(schema);
 
-    case z.ZodFirstPartyTypeKind.ZodEnum:
-      return ctx.rng.pick((def as z.ZodEnumDef).values as unknown as unknown[]);
+    case "enum":
+      // In v4, both z.enum() and z.nativeEnum() map to "enum".
+      // getEnumValues handles both and filters reverse-map keys.
+      return ctx.rng.pick(getEnumValues(schema));
 
-    case z.ZodFirstPartyTypeKind.ZodNativeEnum:
-      return dispatchNativeEnum(schema as z.ZodNativeEnum<z.EnumLike>, ctx);
+    case "nativeEnum":
+      // v3 only — z.nativeEnum() in v3
+      return dispatchNativeEnum(schema, ctx);
 
-    case z.ZodFirstPartyTypeKind.ZodOptional:
-      return dispatchOptional(schema as z.ZodOptional<z.ZodTypeAny>, ctx, config, leaf);
+    case "optional":
+      return dispatchOptional(schema, ctx, config, leaf);
 
-    case z.ZodFirstPartyTypeKind.ZodNullable:
-      return dispatchNullable(schema as z.ZodNullable<z.ZodTypeAny>, ctx, config, leaf);
+    case "nullable":
+      return dispatchNullable(schema, ctx, config, leaf);
 
-    case z.ZodFirstPartyTypeKind.ZodDefault:
-      return dispatchDefault(schema as z.ZodDefault<z.ZodTypeAny>, ctx, config, leaf);
+    case "default":
+      return dispatchDefault(schema, ctx, config, leaf);
 
-    case z.ZodFirstPartyTypeKind.ZodCatch:
+    case "catch":
       // Generate inner schema normally; catch fallback is ignored
-      return dispatch((def as z.ZodCatchDef<z.ZodTypeAny>).innerType, ctx, config, leaf);
+      return dispatch(getInnerType(schema), ctx, config, leaf);
 
-    case z.ZodFirstPartyTypeKind.ZodArray:
-      return dispatchArray(schema as z.ZodArray<z.ZodTypeAny>, ctx, config);
+    case "array":
+      return dispatchArray(schema, ctx, config);
 
-    case z.ZodFirstPartyTypeKind.ZodObject:
-      return dispatchObject(schema as z.ZodObject<z.ZodRawShape>, ctx, config);
+    case "object":
+      return dispatchObject(schema, ctx, config);
 
-    case z.ZodFirstPartyTypeKind.ZodUnion:
-      return dispatchUnion(schema as z.ZodUnion<z.ZodUnionOptions>, ctx, config, leaf);
+    case "union":
+      return dispatchUnion(schema, ctx, config, leaf);
 
-    case z.ZodFirstPartyTypeKind.ZodDiscriminatedUnion:
-      return dispatchDiscriminatedUnion(schema as z.ZodDiscriminatedUnion<string, z.ZodDiscriminatedUnionOption<string>[]>, ctx, config);
+    case "discriminated_union":
+      return dispatchDiscriminatedUnion(schema, ctx, config);
 
-    case z.ZodFirstPartyTypeKind.ZodIntersection:
-      return dispatchIntersection(schema as z.ZodIntersection<z.ZodTypeAny, z.ZodTypeAny>, ctx, config);
+    case "intersection":
+      return dispatchIntersection(schema, ctx, config);
 
-    case z.ZodFirstPartyTypeKind.ZodTuple:
-      return dispatchTuple(schema as z.ZodTuple, ctx, config);
+    case "tuple":
+      return dispatchTuple(schema, ctx, config);
 
-    case z.ZodFirstPartyTypeKind.ZodRecord:
-      return dispatchRecord(schema as z.ZodRecord, ctx, config);
+    case "record":
+      return dispatchRecord(schema, ctx, config);
 
-    case z.ZodFirstPartyTypeKind.ZodMap:
-      return dispatchMap(schema as z.ZodMap, ctx, config);
+    case "map":
+      return dispatchMap(schema, ctx, config);
 
-    case z.ZodFirstPartyTypeKind.ZodSet:
-      return dispatchSet(schema as z.ZodSet, ctx, config);
+    case "set":
+      return dispatchSet(schema, ctx, config);
 
-    case z.ZodFirstPartyTypeKind.ZodLazy:
-      return dispatchLazy(schema as z.ZodLazy<z.ZodTypeAny>, ctx, config, leaf);
+    case "lazy":
+      return dispatchLazy(schema, ctx, config, leaf);
 
-    case z.ZodFirstPartyTypeKind.ZodReadonly:
+    case "readonly":
       // Readonly wrapper — generate inner type
-      return dispatch((def as z.ZodReadonlyDef).innerType, ctx, config, leaf);
+      return dispatch(getInnerType(schema), ctx, config, leaf);
 
-    case z.ZodFirstPartyTypeKind.ZodBranded:
-      // Brand is ignored — generate underlying type
-      return dispatch((def as z.ZodBrandedDef<z.ZodTypeAny>).type, ctx, config, leaf);
+    case "branded":
+      // Brand is ignored — generate underlying type (v3 only; v4 branded maps to its base type)
+      return dispatch(getBrandedInner(schema), ctx, config, leaf);
 
-    case z.ZodFirstPartyTypeKind.ZodEffects: {
-      const effectsDef = def as z.ZodEffectsDef<z.ZodTypeAny>;
-      if (effectsDef.effect.type === "preprocess") {
+    case "effects": {
+      // v3 ZodEffects
+      const { effectType, innerSchema } = getEffectsInfo(schema);
+      if (effectType === "preprocess") {
+        // z.coerce.* in v3 uses preprocess. If the output is a primitive type, generate from it.
+        const outType = typeName(innerSchema);
+        const coercePrimitives = ["string", "number", "boolean", "bigint", "date"];
+        if (coercePrimitives.includes(outType)) {
+          return dispatch(innerSchema, ctx, config, leaf);
+        }
         throw new ZodForgeError(
           `z.preprocess() is not supported in v1 at ${formatPath(ctx.path)}.`,
           "UNSUPPORTED_SCHEMA",
         );
       }
-      // transform or refinement
-      if (effectsDef.effect.type === "refinement") {
+      if (effectType === "refinement") {
         throw new ZodForgeError(
           `z.refine()/z.superRefine() is not supported at ${formatPath(ctx.path)}. ` +
             `zod-forge cannot satisfy arbitrary refinement predicates.`,
@@ -159,39 +201,68 @@ function dispatch(
         );
       }
       // transform — generate inner schema (output is produced by safeParse)
-      return dispatch(effectsDef.schema, ctx, config, leaf);
+      return dispatch(innerSchema, ctx, config, leaf);
     }
 
-    case z.ZodFirstPartyTypeKind.ZodPipeline:
+    case "transform":
+      // Some versions may expose this type explicitly
       throw new ZodForgeError(
-        `z.pipe() is not supported in v1 at ${formatPath(ctx.path)}.`,
+        `z.transform() is not supported in v1 at ${formatPath(ctx.path)}.`,
         "UNSUPPORTED_SCHEMA",
       );
 
-    case z.ZodFirstPartyTypeKind.ZodPromise:
+    case "pipe": {
+      if (!isV4(schema)) {
+        // v3 ZodPipeline
+        throw new ZodForgeError(
+          `z.pipe() is not supported in v1 at ${formatPath(ctx.path)}.`,
+          "UNSUPPORTED_SCHEMA",
+        );
+      }
+      // v4: distinguish preprocess/coerce (input is a transform) from .transform() (output is transform)
+      const pipeInput = getPipeInputSchema(schema);
+      if (typeName(pipeInput) === "transform") {
+        // Could be z.coerce.* — if output is a primitive type, generate from output directly.
+        // The coerce transform (String, Number, Boolean, …) is a no-op on the correct native type.
+        const pipeOut = getPipeOutputSchema(schema);
+        const outType = typeName(pipeOut);
+        const coercePrimitives = ["string", "number", "boolean", "bigint", "date"];
+        if (coercePrimitives.includes(outType)) {
+          return dispatch(pipeOut, ctx, config, leaf);
+        }
+        throw new ZodForgeError(
+          `z.preprocess() is not supported in v1 at ${formatPath(ctx.path)}.`,
+          "UNSUPPORTED_SCHEMA",
+        );
+      }
+      // .transform() — generate from input schema; transform runs via safeParse
+      return dispatch(pipeInput, ctx, config, leaf);
+    }
+
+    case "promise":
       throw new ZodForgeError(
         `z.promise() is not supported at ${formatPath(ctx.path)}. Use mock(innerSchema) directly.`,
         "UNSUPPORTED_SCHEMA",
       );
 
-    case z.ZodFirstPartyTypeKind.ZodSymbol:
+    case "symbol":
       throw new ZodForgeError(
         `z.symbol() is not supported in v1 at ${formatPath(ctx.path)}.`,
         "UNSUPPORTED_SCHEMA",
       );
 
-    case z.ZodFirstPartyTypeKind.ZodFunction:
+    case "function":
       throw new ZodForgeError(
         `z.function() is not supported at ${formatPath(ctx.path)}.`,
         "UNSUPPORTED_SCHEMA",
       );
 
-    case z.ZodFirstPartyTypeKind.ZodVoid:
+    case "void":
       return undefined;
 
     default:
       throw new ZodForgeError(
-        `Unsupported Zod type "${def.typeName}" at ${formatPath(ctx.path)}.`,
+        `Unsupported Zod type "${tn}" at ${formatPath(ctx.path)}.`,
         "UNSUPPORTED_SCHEMA",
       );
   }
@@ -202,7 +273,7 @@ function dispatch(
 // ---------------------------------------------------------------------------
 
 function dispatchString(
-  schema: z.ZodString,
+  schema: z.ZodTypeAny,
   ctx: GenerationContext,
   config: GlobalConfig,
   leaf: string | null,
@@ -211,28 +282,95 @@ function dispatchString(
   const custom = applyCustomMatchers(leaf, config.matchers);
   if (custom !== undefined) return String(custom);
 
-  const checks = (schema._def as z.ZodStringDef).checks;
   const c: StringConstraints = {};
 
-  for (const check of checks) {
-    switch (check.kind) {
-      case "min": c.min = check.value; break;
-      case "max": c.max = check.value; break;
-      case "length": c.length = check.value; break;
-      case "email": c.email = true; break;
-      case "url": c.url = true; break;
-      case "uuid": c.uuid = true; break;
-      case "regex": c.regex = check.regex; break;
-      case "startsWith": c.startsWith = check.value; break;
-      case "endsWith": c.endsWith = check.value; break;
-      case "cuid": c.cuid = true; break;
-      case "cuid2": c.cuid2 = true; break;
-      case "ulid": c.ulid = true; break;
-      case "datetime": c.datetime = true; break;
-      case "ip": c.ip = true; break;
-      case "emoji": c.emoji = true; break;
-      case "base64": c.base64 = true; break;
-      // "includes", "trim", "toLowerCase", "toUpperCase" — ignore for generation
+  if (isV4(schema)) {
+    // v4: some schemas (z.ipv4(), z.ipv6(), z.cidrv4(), z.cidrv6()) carry their
+    // format on def.format rather than in checks — handle them first.
+    const topFormat = rawDef(schema).format as string | undefined;
+    if (topFormat === "ipv4") c.ipv4 = true;
+    else if (topFormat === "ipv6") c.ipv6 = true;
+    else if (topFormat === "cidrv4") c.cidr = true;
+    else if (topFormat === "cidrv6") c.cidrv6 = true;
+
+    // v4: checks are sub-schemas with ._zod.def
+    const rawChecks = getChecks(schema);
+    const checks = normalizeV4Checks(rawChecks);
+
+    for (const cd of checks) {
+      switch (cd.check) {
+        case "min_length": c.min = cd.minimum as number; break;
+        case "max_length": c.max = cd.maximum as number; break;
+        case "length_equals": c.length = cd.length as number; break;
+        case "string_format":
+          switch (cd.format as string) {
+            case "email": c.email = true; break;
+            case "url": c.url = true; break;
+            case "uuid": c.uuid = true; break;
+            case "regex":
+              // cd.pattern is a RegExp in v4
+              if (cd.pattern instanceof RegExp) c.regex = cd.pattern;
+              break;
+            case "starts_with":
+              // v4 uses prefix/suffix instead of value
+              c.startsWith = (cd.prefix ?? cd.value) as string | undefined;
+              break;
+            case "ends_with":
+              c.endsWith = (cd.suffix ?? cd.value) as string | undefined;
+              break;
+            case "cuid": c.cuid = true; break;
+            case "cuid2": c.cuid2 = true; break;
+            case "ulid": c.ulid = true; break;
+            case "nanoid": c.nanoid = true; break;
+            case "jwt": c.jwt = true; break;
+            case "datetime": c.datetime = true; break;
+            case "date": c.dateOnly = true; break;
+            case "time": c.timeOnly = true; break;
+            case "duration": c.duration = true; break;
+            case "ip": c.ip = true; break;
+            case "ipv4": c.ipv4 = true; break;
+            case "ipv6": c.ipv6 = true; break;
+            case "cidr": c.cidr = true; break;
+            case "emoji": c.emoji = true; break;
+            case "base64": c.base64 = true; break;
+            case "base64url": c.base64url = true; break;
+          }
+          break;
+      }
+    }
+  } else {
+    // v3: checks are plain objects with a 'kind' field
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const checks = getChecks(schema) as any[];
+
+    for (const check of checks) {
+      switch (check.kind) {
+        case "min": c.min = check.value; break;
+        case "max": c.max = check.value; break;
+        case "length": c.length = check.value; break;
+        case "email": c.email = true; break;
+        case "url": c.url = true; break;
+        case "uuid": c.uuid = true; break;
+        case "regex": c.regex = check.regex; break;
+        case "startsWith": c.startsWith = check.value; break;
+        case "endsWith": c.endsWith = check.value; break;
+        case "cuid": c.cuid = true; break;
+        case "cuid2": c.cuid2 = true; break;
+        case "ulid": c.ulid = true; break;
+        case "nanoid": c.nanoid = true; break;
+        case "jwt": c.jwt = true; break;
+        case "datetime": c.datetime = true; break;
+        case "date": c.dateOnly = true; break;
+        case "time": c.timeOnly = true; break;
+        case "duration": c.duration = true; break;
+        case "ip": c.ip = true; break;
+        case "ipv4": c.ipv4 = true; break;
+        case "ipv6": c.ipv6 = true; break;
+        case "cidr": c.cidr = true; break;
+        case "emoji": c.emoji = true; break;
+        case "base64": c.base64 = true; break;
+        case "base64url": c.base64url = true; break;
+      }
     }
   }
 
@@ -240,7 +378,7 @@ function dispatchString(
 }
 
 function dispatchNumber(
-  schema: z.ZodNumber,
+  schema: z.ZodTypeAny,
   ctx: GenerationContext,
   config: GlobalConfig,
   leaf: string | null,
@@ -248,45 +386,110 @@ function dispatchNumber(
   const custom = applyCustomMatchers(leaf, config.matchers);
   if (custom !== undefined) return Number(custom);
 
-  const checks = (schema._def as z.ZodNumberDef).checks;
   const c: NumberConstraints = {};
 
-  for (const check of checks) {
-    switch (check.kind) {
-      case "min": c.gte = check.value; c.min = check.value; break;
-      case "max": c.lte = check.value; c.max = check.value; break;
-      case "int": c.int = true; break;
-      case "multipleOf": c.multipleOf = check.value; break;
-      case "finite": c.finite = true; break;
-    }
-  }
+  if (isV4(schema)) {
+    const rawChecks = getChecks(schema);
+    const checks = normalizeV4Checks(rawChecks);
 
-  // Zod number checks also include gt/gte/lt/lte but they're stored as min/max in older versions
-  // Handle nonnegative / nonpositive
-  for (const check of checks) {
-    if (check.kind === "min" && check.value > 0) c.positive = true;
-    if (check.kind === "min" && check.value === 0) c.nonnegative = true;
-    if (check.kind === "max" && check.value < 0) c.negative = true;
-    if (check.kind === "max" && check.value === 0 && check.inclusive === false) c.negative = true;
-    if (check.kind === "max" && check.value === 0 && check.inclusive !== false) c.nonpositive = true;
+    for (const cd of checks) {
+      switch (cd.check as string) {
+        case "greater_than":
+          if (cd.inclusive) {
+            c.gte = cd.value as number;
+            c.min = cd.value as number;
+            if ((cd.value as number) > 0) c.positive = true;
+            if ((cd.value as number) === 0) c.nonnegative = true;
+          } else {
+            c.gt = cd.value as number;
+            if ((cd.value as number) >= 0) c.positive = true;
+          }
+          break;
+        case "less_than":
+          if (cd.inclusive) {
+            c.lte = cd.value as number;
+            c.max = cd.value as number;
+            if ((cd.value as number) < 0) c.negative = true;
+            if ((cd.value as number) === 0) c.nonpositive = true;
+          } else {
+            c.lt = cd.value as number;
+            if ((cd.value as number) <= 0) c.negative = true;
+          }
+          break;
+        case "number_format":
+          if (cd.format === "safeint" || cd.format === "int") c.int = true;
+          if (cd.format === "finite") c.finite = true;
+          break;
+        case "multiple_of":
+          c.multipleOf = cd.value as number;
+          break;
+      }
+    }
+  } else {
+    // v3
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const checks = getChecks(schema) as any[];
+
+    for (const check of checks) {
+      switch (check.kind) {
+        case "min": c.gte = check.value; c.min = check.value; break;
+        case "max": c.lte = check.value; c.max = check.value; break;
+        case "int": c.int = true; break;
+        case "multipleOf": c.multipleOf = check.value; break;
+        case "finite": c.finite = true; break;
+      }
+    }
+
+    // Handle nonnegative / nonpositive in v3
+    for (const check of checks) {
+      if (check.kind === "min" && check.value > 0) c.positive = true;
+      if (check.kind === "min" && check.value === 0) c.nonnegative = true;
+      if (check.kind === "max" && check.value < 0) c.negative = true;
+      if (check.kind === "max" && check.value === 0 && check.inclusive === false) c.negative = true;
+      if (check.kind === "max" && check.value === 0 && check.inclusive !== false) c.nonpositive = true;
+    }
   }
 
   return generateNumber(c, ctx.rng, ctx.path, leaf);
 }
 
 function dispatchBigInt(
-  schema: z.ZodBigInt,
+  schema: z.ZodTypeAny,
   ctx: GenerationContext,
   _config: GlobalConfig,
 ): bigint {
-  const checks = (schema._def as z.ZodBigIntDef).checks;
   const c: BigIntConstraints = {};
 
-  for (const check of checks) {
-    switch (check.kind) {
-      case "min": c.min = check.value; break;
-      case "max": c.max = check.value; break;
-      case "multipleOf": c.multipleOf = check.value; break;
+  if (isV4(schema)) {
+    const rawChecks = getChecks(schema);
+    const checks = normalizeV4Checks(rawChecks);
+
+    for (const cd of checks) {
+      switch (cd.check as string) {
+        case "greater_than":
+          if (cd.inclusive) c.min = cd.value as bigint;
+          else c.gt = cd.value as bigint;
+          break;
+        case "less_than":
+          if (cd.inclusive) c.max = cd.value as bigint;
+          else c.lt = cd.value as bigint;
+          break;
+        case "multiple_of":
+          c.multipleOf = cd.value as bigint;
+          break;
+      }
+    }
+  } else {
+    // v3
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const checks = getChecks(schema) as any[];
+
+    for (const check of checks) {
+      switch (check.kind) {
+        case "min": c.min = check.value; break;
+        case "max": c.max = check.value; break;
+        case "multipleOf": c.multipleOf = check.value; break;
+      }
     }
   }
 
@@ -294,17 +497,36 @@ function dispatchBigInt(
 }
 
 function dispatchDate(
-  schema: z.ZodDate,
+  schema: z.ZodTypeAny,
   ctx: GenerationContext,
   _config: GlobalConfig,
 ): Date {
-  const checks = (schema._def as z.ZodDateDef).checks;
   const c: DateConstraints = {};
 
-  for (const check of checks) {
-    switch (check.kind) {
-      case "min": c.min = new Date(check.value); break;
-      case "max": c.max = new Date(check.value); break;
+  if (isV4(schema)) {
+    const rawChecks = getChecks(schema);
+    const checks = normalizeV4Checks(rawChecks);
+
+    for (const cd of checks) {
+      switch (cd.check as string) {
+        case "greater_than":
+          c.min = new Date(cd.value as string | number);
+          break;
+        case "less_than":
+          c.max = new Date(cd.value as string | number);
+          break;
+      }
+    }
+  } else {
+    // v3
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const checks = getChecks(schema) as any[];
+
+    for (const check of checks) {
+      switch (check.kind) {
+        case "min": c.min = new Date(check.value); break;
+        case "max": c.max = new Date(check.value); break;
+      }
     }
   }
 
@@ -312,10 +534,10 @@ function dispatchDate(
 }
 
 function dispatchNativeEnum(
-  schema: z.ZodNativeEnum<z.EnumLike>,
+  schema: z.ZodTypeAny,
   ctx: GenerationContext,
 ): unknown {
-  const enumObj = (schema._def as z.ZodNativeEnumDef).values;
+  const enumObj = getNativeEnumObject(schema);
   // Native enums can have numeric reverse mappings — only take values that
   // are NOT numeric-string keys pointing to a string (i.e., filter reverse map)
   const values = Object.values(enumObj).filter(
@@ -325,53 +547,52 @@ function dispatchNativeEnum(
 }
 
 function dispatchOptional(
-  schema: z.ZodOptional<z.ZodTypeAny>,
+  schema: z.ZodTypeAny,
   ctx: GenerationContext,
   config: GlobalConfig,
   leaf: string | null,
 ): unknown {
   // Decide BEFORE generating inner value
   if (!ctx.rng.bool(0.7)) return undefined;
-  const inner = (schema._def as z.ZodOptionalDef).innerType;
+  const inner = getInnerType(schema);
   return dispatch(inner, ctx, config, leaf);
 }
 
 function dispatchNullable(
-  schema: z.ZodNullable<z.ZodTypeAny>,
+  schema: z.ZodTypeAny,
   ctx: GenerationContext,
   config: GlobalConfig,
   leaf: string | null,
 ): unknown {
   // Decide BEFORE generating inner value
   if (!ctx.rng.bool(0.8)) return null;
-  const inner = (schema._def as z.ZodNullableDef).innerType;
+  const inner = getInnerType(schema);
   return dispatch(inner, ctx, config, leaf);
 }
 
 function dispatchDefault(
-  schema: z.ZodDefault<z.ZodTypeAny>,
+  schema: z.ZodTypeAny,
   ctx: GenerationContext,
   config: GlobalConfig,
   leaf: string | null,
 ): unknown {
-  const def = schema._def as z.ZodDefaultDef;
+  const defaultVal = getDefaultValue(schema);
   if (ctx.useDefaults) {
-    // Return the default value
-    return typeof def.defaultValue === "function" ? def.defaultValue() : def.defaultValue;
+    return typeof defaultVal === "function" ? (defaultVal as () => unknown)() : defaultVal;
   }
   // Generate dynamically from inner schema
-  return dispatch(def.innerType, ctx, config, leaf);
+  return dispatch(getInnerType(schema), ctx, config, leaf);
 }
 
 function dispatchArray(
-  schema: z.ZodArray<z.ZodTypeAny>,
+  schema: z.ZodTypeAny,
   ctx: GenerationContext,
   config: GlobalConfig,
 ): unknown[] {
-  const def = schema._def as z.ZodArrayDef;
-  const exactLen = def.exactLength?.value;
-  const minLen = exactLen ?? def.minLength?.value ?? 1;
-  const maxLen = exactLen ?? def.maxLength?.value ?? 5;
+  const { min, max, exact } = getArrayBounds(schema);
+  const exactLen = exact;
+  const minLen = exactLen ?? min ?? 1;
+  const maxLen = exactLen ?? max ?? 5;
 
   if (minLen > maxLen) {
     throw new ZodForgeError(
@@ -382,16 +603,17 @@ function dispatchArray(
 
   const len = exactLen !== undefined ? exactLen : ctx.rng.nextInt(minLen, maxLen);
   const itemCtx = arrayItemCtx(ctx);
+  const element = getArrayElement(schema);
 
-  return Array.from({ length: len }, () => dispatch(def.type, itemCtx, config, leafKey(itemCtx.path)));
+  return Array.from({ length: len }, () => dispatch(element, itemCtx, config, leafKey(itemCtx.path)));
 }
 
 function dispatchObject(
-  schema: z.ZodObject<z.ZodRawShape>,
+  schema: z.ZodTypeAny,
   ctx: GenerationContext,
   config: GlobalConfig,
 ): Record<string, unknown> {
-  const shape = schema.shape as z.ZodRawShape;
+  const shape = getShape(schema);
   const result: Record<string, unknown> = {};
 
   for (const [key, fieldSchema] of Object.entries(shape)) {
@@ -403,12 +625,12 @@ function dispatchObject(
 }
 
 function dispatchUnion(
-  schema: z.ZodUnion<z.ZodUnionOptions>,
+  schema: z.ZodTypeAny,
   ctx: GenerationContext,
   config: GlobalConfig,
   leaf: string | null,
 ): unknown {
-  const options = (schema._def as z.ZodUnionDef).options;
+  const options = getUnionOptions(schema);
 
   // Shuffle to try in random order (each branch at most once)
   const indices = Array.from({ length: options.length }, (_, i) => i);
@@ -430,33 +652,25 @@ function dispatchUnion(
 }
 
 function dispatchDiscriminatedUnion(
-  schema: z.ZodDiscriminatedUnion<string, z.ZodDiscriminatedUnionOption<string>[]>,
+  schema: z.ZodTypeAny,
   ctx: GenerationContext,
   config: GlobalConfig,
 ): unknown {
-  const def = schema._def as z.ZodDiscriminatedUnionDef<string>;
-  const options = def.options;
-  const discriminator = def.discriminator;
-
+  const options = getUnionOptions(schema);
   const chosen = ctx.rng.pick(options);
   return dispatchObject(chosen, ctx, config);
 }
 
-type ZodDiscriminatedUnionDef<T extends string> = {
-  discriminator: T;
-  options: z.ZodDiscriminatedUnionOption<T>[];
-};
-
 function dispatchIntersection(
-  schema: z.ZodIntersection<z.ZodTypeAny, z.ZodTypeAny>,
+  schema: z.ZodTypeAny,
   ctx: GenerationContext,
   config: GlobalConfig,
 ): unknown {
-  const def = schema._def as z.ZodIntersectionDef;
-  const left = dispatch(def.left, ctx, config, leafKey(ctx.path));
-  const right = dispatch(def.right, ctx, config, leafKey(ctx.path));
+  const { left, right } = getIntersectionParts(schema);
+  const leftVal = dispatch(left, ctx, config, leafKey(ctx.path));
+  const rightVal = dispatch(right, ctx, config, leafKey(ctx.path));
 
-  const merged = deepMergeForIntersection(left, right);
+  const merged = deepMergeForIntersection(leftVal, rightVal);
 
   // Validate merged result
   const parsed = schema.safeParse(merged);
@@ -486,51 +700,53 @@ function deepMergeForIntersection(a: unknown, b: unknown): unknown {
 }
 
 function dispatchTuple(
-  schema: z.ZodTuple,
+  schema: z.ZodTypeAny,
   ctx: GenerationContext,
   config: GlobalConfig,
 ): unknown[] {
-  const def = schema._def as z.ZodTupleDef;
-  return def.items.map((item, i) => {
+  const items = getTupleItems(schema);
+  return items.map((item, i) => {
     const itemCtx = childCtx(ctx, String(i));
-    return dispatch(item as z.ZodTypeAny, itemCtx, config, leafKey(itemCtx.path));
+    return dispatch(item, itemCtx, config, leafKey(itemCtx.path));
   });
 }
 
 function dispatchRecord(
-  schema: z.ZodRecord,
+  schema: z.ZodTypeAny,
   ctx: GenerationContext,
   config: GlobalConfig,
 ): Record<string, unknown> {
-  const def = schema._def as z.ZodRecordDef;
+  const keyType = getRecordKeyType(schema);
+  const valType = getValueType(schema);
   const count = ctx.rng.nextInt(2, 4);
   const result: Record<string, unknown> = {};
 
   for (let i = 0; i < count; i++) {
     const keyCtx = childCtx(ctx, `key${i}`);
-    const key = String(dispatch(def.keyType, keyCtx, config, null));
+    const key = String(dispatch(keyType, keyCtx, config, null));
     const valCtx = childCtx(ctx, key);
-    result[key] = dispatch(def.valueType, valCtx, config, leafKey(valCtx.path));
+    result[key] = dispatch(valType, valCtx, config, leafKey(valCtx.path));
   }
 
   return result;
 }
 
 function dispatchMap(
-  schema: z.ZodMap,
+  schema: z.ZodTypeAny,
   ctx: GenerationContext,
   config: GlobalConfig,
 ): Map<unknown, unknown> {
-  const def = schema._def as z.ZodMapDef;
+  const keyType = getMapKeyType(schema);
+  const valType = getValueType(schema);
   const target = ctx.rng.nextInt(2, 4);
   const map = new Map<unknown, unknown>();
 
   // Generate extra attempts to account for duplicate keys
   for (let i = 0; map.size < target && i < target * 4; i++) {
     const keyCtx = childCtx(ctx, `mapKey${i}`);
-    const key = dispatch(def.keyType, keyCtx, config, null);
+    const key = dispatch(keyType, keyCtx, config, null);
     const valCtx = childCtx(ctx, `mapVal${i}`);
-    const val = dispatch(def.valueType, valCtx, config, null);
+    const val = dispatch(valType, valCtx, config, null);
     map.set(key, val);
   }
 
@@ -538,19 +754,18 @@ function dispatchMap(
 }
 
 function dispatchSet(
-  schema: z.ZodSet,
+  schema: z.ZodTypeAny,
   ctx: GenerationContext,
   config: GlobalConfig,
 ): Set<unknown> {
-  const def = schema._def as z.ZodSetDef;
+  const valType = getValueType(schema);
   const count = ctx.rng.nextInt(2, 4);
   const set = new Set<unknown>();
 
   // Generate more than needed to get unique values
   for (let i = 0; i < count * 3 && set.size < count; i++) {
     const itemCtx = arrayItemCtx(ctx);
-    const val = dispatch(def.valueType, itemCtx, config, null);
-    // Only add primitives or stringifiable values that we can dedupe
+    const val = dispatch(valType, itemCtx, config, null);
     set.add(val);
   }
 
@@ -558,22 +773,23 @@ function dispatchSet(
 }
 
 function dispatchLazy(
-  schema: z.ZodLazy<z.ZodTypeAny>,
+  schema: z.ZodTypeAny,
   ctx: GenerationContext,
   config: GlobalConfig,
   leaf: string | null,
 ): unknown {
   if (ctx.depth >= ctx.maxDepth) {
     // Check what the lazy resolves to
-    const inner = schema._def.getter();
-    const innerDef = (inner._def as z.ZodTypeDef & { typeName: z.ZodFirstPartyTypeKind }).typeName;
+    const getter = getLazyGetter(schema);
+    const inner = getter();
+    const innerType = typeName(inner);
 
     // Optional at max depth → undefined
-    if (innerDef === z.ZodFirstPartyTypeKind.ZodOptional) return undefined;
+    if (innerType === "optional") return undefined;
     // Array at max depth → []
-    if (innerDef === z.ZodFirstPartyTypeKind.ZodArray) return [];
+    if (innerType === "array") return [];
     // Nullable at max depth → null
-    if (innerDef === z.ZodFirstPartyTypeKind.ZodNullable) return null;
+    if (innerType === "nullable") return null;
 
     // Required object at max depth → error
     throw new ZodForgeError(
@@ -583,7 +799,8 @@ function dispatchLazy(
     );
   }
 
-  const inner = schema._def.getter();
+  const getter = getLazyGetter(schema);
+  const inner = getter();
   // Depth was already incremented by the caller's childCtx/arrayItemCtx.
   // We increment here specifically for lazy since lazy is the recursion boundary.
   const deeperCtx: GenerationContext = { ...ctx, depth: ctx.depth + 1 };
@@ -607,4 +824,4 @@ function shuffleInPlace<T>(arr: T[], rng: { nextInt(min: number, max: number): n
   }
 }
 
-export { dispatch, deepMergeForIntersection };
+export { dispatch, deepMergeForIntersection, rawDef };

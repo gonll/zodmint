@@ -1,6 +1,6 @@
 {
   "name": "zod-forge",
-  "version": "1.0.0",
+  "version": "1.2.0",
   "description": "TypeScript-first schema-valid test fixture generator for Zod schemas",
   "type": "module",
   "main": "./dist/index.cjs",
@@ -24,14 +24,14 @@
     "lint": "tsc --noEmit"
   },
   "peerDependencies": {
-    "zod": "^3.23.0"
+    "zod": ">=3.23.0"
   },
   "devDependencies": {
     "@types/node": "^20.0.0",
     "tsup": "^8.0.0",
     "typescript": "^5.4.0",
     "vitest": "^1.6.0",
-    "zod": "^3.23.8"
+    "zod": "^4.4.3"
   },
   "keywords": [
     "zod",

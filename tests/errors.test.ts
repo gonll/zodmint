@@ -49,8 +49,9 @@ describe("UNSUPPORTED_SCHEMA errors", () => {
     }
   });
 
-  it("z.preprocess() throws UNSUPPORTED_SCHEMA", () => {
-    const schema = z.preprocess((v) => v, z.string());
+  it("z.preprocess() with non-primitive output throws UNSUPPORTED_SCHEMA", () => {
+    // preprocess with a complex (non-primitive) output type is still unsupported
+    const schema = z.preprocess((v) => v, z.object({ x: z.string() }));
     expect(() => mock(schema)).toThrow(ZodForgeError);
     try {
       mock(schema);
@@ -58,6 +59,14 @@ describe("UNSUPPORTED_SCHEMA errors", () => {
       expect((e as ZodForgeError).code).toBe("UNSUPPORTED_SCHEMA");
       expect((e as ZodForgeError).message).toMatch(/preprocess/i);
     }
+  });
+
+  it("z.preprocess() with primitive output (z.coerce-like) works", () => {
+    // preprocess wrapping a primitive output behaves like z.coerce — we generate the output type
+    const schema = z.preprocess((v) => String(v), z.string());
+    expect(() => mock(schema)).not.toThrow();
+    const result = mock(schema);
+    expect(typeof result).toBe("string");
   });
 
   it("z.promise() throws UNSUPPORTED_SCHEMA", () => {
