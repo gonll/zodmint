@@ -46,7 +46,10 @@
     "testing",
     "typescript",
     "schema",
-    "generator"
+    "generator",
+    "homepage",
+    "repository",
+    "bugs"
   ],
   "license": "MIT"
 }
