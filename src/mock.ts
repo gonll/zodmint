@@ -1,5 +1,4 @@
 import { z } from "zod";
-import { ZodForgeError } from "./errors.js";
 import type { MockOptions } from "./config.js";
 import { snapshotConfig } from "./config.js";
 import {
@@ -23,14 +22,6 @@ export function mock<S extends z.ZodTypeAny>(
   const config = snapshotConfig();
 
   const mode = options?.mode ?? "realistic";
-
-  if (mode === "random") {
-    throw new ZodForgeError(
-      `Generation mode "random" is not supported in v1. ` +
-        `Only "realistic" and "edge" are implemented. "random" is coming in v2.`,
-      "UNSUPPORTED_MODE",
-    );
-  }
 
   const rng =
     options?.seed !== undefined

@@ -69,15 +69,13 @@ describe("UNSUPPORTED_SCHEMA errors", () => {
     expect(typeof result).toBe("string");
   });
 
-  it("z.promise() throws UNSUPPORTED_SCHEMA", () => {
+  it("z.promise() no longer throws — it generates a Promise", async () => {
     const schema = z.promise(z.string());
-    expect(() => mock(schema)).toThrow(ZodForgeError);
-    try {
-      mock(schema);
-    } catch (e) {
-      expect((e as ZodForgeError).code).toBe("UNSUPPORTED_SCHEMA");
-      expect((e as ZodForgeError).message).toMatch(/promise/i);
-    }
+    expect(() => mock(schema)).not.toThrow();
+    const result = mock(schema);
+    expect(result).toBeInstanceOf(Promise);
+    const value = await result;
+    expect(typeof value).toBe("string");
   });
 
   it("z.symbol() throws UNSUPPORTED_SCHEMA", () => {
@@ -91,15 +89,8 @@ describe("UNSUPPORTED_SCHEMA errors", () => {
     }
   });
 
-  it("z.refine() throws UNSUPPORTED_SCHEMA", () => {
-    const schema = z.string().refine((s) => s.startsWith("x"));
-    expect(() => mock(schema)).toThrow(ZodForgeError);
-    try {
-      mock(schema);
-    } catch (e) {
-      expect((e as ZodForgeError).code).toBe("UNSUPPORTED_SCHEMA");
-    }
-  });
+  // z.refine() no longer throws UNSUPPORTED_SCHEMA — it uses generate-and-test.
+  // Unsatisfiable refinements throw GENERATION_FAILED (tested in GENERATION_FAILED block).
 
   it("overrides on transform schema throws UNSUPPORTED_SCHEMA with explanation", () => {
     const schema = z.string().transform((s) => s.length);
@@ -120,13 +111,10 @@ describe("UNSUPPORTED_MODE errors", () => {
     expect(z.string().safeParse(result).success).toBe(true);
   });
 
-  it("mode: 'random' throws UNSUPPORTED_MODE", () => {
-    expect(() => mock(z.string(), { mode: "random" })).toThrow(ZodForgeError);
-    try {
-      mock(z.string(), { mode: "random" });
-    } catch (e) {
-      expect((e as ZodForgeError).code).toBe("UNSUPPORTED_MODE");
-    }
+  it("mode: 'random' does not throw — it is now implemented", () => {
+    expect(() => mock(z.string(), { mode: "random" })).not.toThrow();
+    const result = mock(z.string(), { mode: "random" });
+    expect(z.string().safeParse(result).success).toBe(true);
   });
 });
 
@@ -167,6 +155,26 @@ describe("GENERATION_FAILED errors", () => {
       z.object({ x: z.string() }),
       z.object({ x: z.number() }),
     );
+    expect(() => mock(schema)).toThrow(ZodForgeError);
+    try { mock(schema); } catch (e) {
+      expect((e as ZodForgeError).code).toBe("GENERATION_FAILED");
+    }
+  });
+
+  it("unsatisfiable refinement throws GENERATION_FAILED", () => {
+    // This refinement can never pass — always returns false
+    const schema = z.string().refine(() => false, "always fails");
+    expect(() => mock(schema)).toThrow(ZodForgeError);
+    try { mock(schema); } catch (e) {
+      expect((e as ZodForgeError).code).toBe("GENERATION_FAILED");
+      expect((e as ZodForgeError).message).toContain("refinement");
+    }
+  });
+
+  it("unsatisfiable superRefine throws GENERATION_FAILED", () => {
+    const schema = z.number().superRefine((val, ctx) => {
+      ctx.addIssue({ code: z.ZodIssueCode.custom, message: "always invalid" });
+    });
     expect(() => mock(schema)).toThrow(ZodForgeError);
     try { mock(schema); } catch (e) {
       expect((e as ZodForgeError).code).toBe("GENERATION_FAILED");

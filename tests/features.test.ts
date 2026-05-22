@@ -195,13 +195,47 @@ describe('mode: "edge"', () => {
     expect(result.tags).toEqual([]);
   });
 
-  it("mode: 'random' still throws UNSUPPORTED_MODE", () => {
-    expect(() => mock(z.string(), { mode: "random" })).toThrow(ZodForgeError);
-    try {
-      mock(z.string(), { mode: "random" });
-    } catch (e) {
-      expect((e as ZodForgeError).code).toBe("UNSUPPORTED_MODE");
-    }
+});
+
+// ---------------------------------------------------------------------------
+// mode: "random"
+// ---------------------------------------------------------------------------
+
+describe('mode: "random"', () => {
+  it("does not throw", () => {
+    expect(() => mock(z.string(), { mode: "random" })).not.toThrow();
+  });
+
+  it("generates valid values", () => {
+    const schema = z.object({
+      email: z.string().email(),
+      age: z.number().int().min(0).max(150),
+      active: z.boolean(),
+    });
+    const result = mock(schema, { mode: "random" });
+    expect(schema.safeParse(result).success).toBe(true);
+  });
+
+  it("field named 'email' without .email() constraint gets a random string not necessarily an email", () => {
+    // In random mode, field name inference is off
+    const schema = z.object({ email: z.string() });
+    // We can't assert it's NOT an email (it might randomly be), but we can
+    // assert it doesn't throw and is a valid string
+    const results = Array.from({ length: 20 }, () => mock(schema, { mode: "random" }));
+    results.forEach(r => expect(typeof r.email).toBe("string"));
+  });
+
+  it("respects format constraints even in random mode", () => {
+    const schema = z.string().email();
+    const result = mock(schema, { mode: "random" });
+    expect(z.string().email().safeParse(result).success).toBe(true);
+  });
+
+  it("same seed produces same output", () => {
+    const schema = z.object({ name: z.string(), score: z.number() });
+    const a = mock(schema, { mode: "random", seed: 7 });
+    const b = mock(schema, { mode: "random", seed: 7 });
+    expect(a).toEqual(b);
   });
 });
 

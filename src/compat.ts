@@ -484,6 +484,72 @@ export function hasRefinementChecks(schema: z.ZodTypeAny): boolean {
   });
 }
 
+/**
+ * Returns a copy of the v4 schema's checks array with all custom/refinement
+ * checks removed. Used by dispatchRefinement to generate a base value from
+ * the un-refined schema, then test it against the full schema.
+ */
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+export function stripRefinementChecks(schema: z.ZodTypeAny): z.ZodTypeAny {
+  if (!isV4(schema)) return schema;
+  const def = rawDef(schema);
+  const checks = (def.checks ?? []) as unknown[];
+  const nonCustomChecks = checks.filter((c) => {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const cd = (c as any)?._zod?.def;
+    return cd?.check !== "custom";
+  });
+  if (nonCustomChecks.length === checks.length) return schema; // no change needed
+  // Reconstruct the schema without custom checks by cloning def with filtered checks
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const stripped = Object.create(Object.getPrototypeOf(schema)) as any;
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const originalDef = (schema as any)._zod;
+  Object.defineProperty(stripped, "_zod", {
+    value: {
+      ...originalDef,
+      def: { ...def, checks: nonCustomChecks },
+    },
+    writable: true,
+    configurable: true,
+    enumerable: false,
+  });
+  return stripped as z.ZodTypeAny;
+}
+
+// ---------------------------------------------------------------------------
+// Refinement detection (v3 ZodEffects)
+// ---------------------------------------------------------------------------
+
+/**
+ * Returns true if the schema is a v3 ZodEffects wrapping a pure refinement
+ * (not a transform or preprocess). Only pure refinements can be handled via
+ * generate-and-test; transforms remain blocked.
+ */
+export function isV3Refinement(schema: z.ZodTypeAny): boolean {
+  if (isV4(schema)) return false;
+  const tn = typeName(schema);
+  if (tn !== "effects") return false;
+  const def = rawDef(schema);
+  return (def.effect as { type?: string } | undefined)?.type === "refinement";
+}
+
+/**
+ * Returns the inner schema from a v3 ZodEffects refinement wrapper.
+ * Throws UNSUPPORTED_SCHEMA if the inner schema cannot be accessed.
+ */
+export function getRefinementInner(schema: z.ZodTypeAny): z.ZodTypeAny {
+  const def = rawDef(schema);
+  const inner = def.schema ?? def.innerType;
+  if (!inner) {
+    throw new ZodForgeError(
+      "Cannot unwrap refinement schema: missing inner schema",
+      "UNSUPPORTED_SCHEMA",
+    );
+  }
+  return inner as z.ZodTypeAny;
+}
+
 // ---------------------------------------------------------------------------
 // Normalized checks helper (v4)
 // ---------------------------------------------------------------------------

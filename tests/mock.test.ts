@@ -103,13 +103,10 @@ describe("mock()", () => {
     expect(schema.safeParse(result).success).toBe(true);
   });
 
-  it("mode: 'random' throws UNSUPPORTED_MODE", () => {
-    expect(() => mock(z.string(), { mode: "random" })).toThrow(ZodForgeError);
-    try {
-      mock(z.string(), { mode: "random" });
-    } catch (e) {
-      expect((e as ZodForgeError).code).toBe("UNSUPPORTED_MODE");
-    }
+  it("mode: 'random' does not throw — it is now implemented", () => {
+    expect(() => mock(z.string(), { mode: "random" })).not.toThrow();
+    const result = mock(z.string(), { mode: "random" });
+    expect(z.string().safeParse(result).success).toBe(true);
   });
 
   it("undefined override values are ignored", () => {

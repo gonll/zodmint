@@ -48,8 +48,12 @@ import {
   getPipeInputSchema,
   getPipeOutputSchema,
   hasRefinementChecks,
+  stripRefinementChecks,
+  isV3Refinement,
+  getRefinementInner,
   normalizeV4Checks,
 } from "../compat.js";
+import { createSeededRNG } from "../context.js";
 
 // ---------------------------------------------------------------------------
 // Main dispatcher
@@ -87,13 +91,15 @@ function dispatch(
     }
   }
 
-  // v4: check for embedded refinement checks (z.refine() becomes a custom check)
+  // v4: schema has embedded refinement checks (z.refine() / z.superRefine())
+  // Use generate-and-test strategy: strip custom checks, generate candidate, validate with full schema
   if (hasRefinementChecks(schema)) {
-    throw new ZodForgeError(
-      `z.refine()/z.superRefine() is not supported at ${formatPath(ctx.path)}. ` +
-        `zod-forge cannot satisfy arbitrary refinement predicates.`,
-      "UNSUPPORTED_SCHEMA",
-    );
+    return dispatchRefinement(schema, ctx, config, leaf, true);
+  }
+
+  // v3: ZodEffects with effect.type === "refinement"
+  if (isV3Refinement(schema)) {
+    return dispatchRefinement(schema, ctx, config, leaf, false);
   }
 
   const tn = typeName(schema);
@@ -216,13 +222,8 @@ function dispatch(
           "UNSUPPORTED_SCHEMA",
         );
       }
-      if (effectType === "refinement") {
-        throw new ZodForgeError(
-          `z.refine()/z.superRefine() is not supported at ${formatPath(ctx.path)}. ` +
-            `zod-forge cannot satisfy arbitrary refinement predicates.`,
-          "UNSUPPORTED_SCHEMA",
-        );
-      }
+      // refinement is handled before the switch by the isV3Refinement() guard above.
+      // If we somehow reach here with a refinement, fall through to transform handling.
       // transform — generate inner schema (output is produced by safeParse)
       return dispatch(innerSchema, ctx, config, leaf);
     }
@@ -262,11 +263,11 @@ function dispatch(
       return dispatch(pipeInput, ctx, config, leaf);
     }
 
-    case "promise":
-      throw new ZodForgeError(
-        `z.promise() is not supported at ${formatPath(ctx.path)}. Use mock(innerSchema) directly.`,
-        "UNSUPPORTED_SCHEMA",
-      );
+    case "promise": {
+      const innerSchema = getInnerType(schema);
+      const innerValue = dispatch(innerSchema, ctx, config, leaf);
+      return Promise.resolve(innerValue);
+    }
 
     case "symbol":
       throw new ZodForgeError(
@@ -305,9 +306,11 @@ function dispatchString(
   const description = getDescription(schema);
   const semanticHint = description ?? leaf;
 
-  // Check custom matchers first (against description or leaf)
-  const custom = applyCustomMatchers(semanticHint, config.matchers);
-  if (custom !== undefined) return String(custom);
+  // Check custom matchers first (against description or leaf) — only in realistic mode
+  if (ctx.mode === "realistic") {
+    const custom = applyCustomMatchers(semanticHint, config.matchers);
+    if (custom !== undefined) return String(custom);
+  }
 
   const c: StringConstraints = {};
 
@@ -425,7 +428,9 @@ function dispatchString(
   }
 
   if (ctx.mode === "edge") return generateEdgeString(c, ctx.rng);
-  return generateString(c, ctx.rng, ctx.path, semanticHint);
+  // In random mode, skip semantic (name/description) inference — pass null as hint
+  const activeHint = ctx.mode === "random" ? null : semanticHint;
+  return generateString(c, ctx.rng, ctx.path, activeHint);
 }
 
 function dispatchNumber(
@@ -435,8 +440,11 @@ function dispatchNumber(
   leaf: string | null,
 ): number {
   const semanticHint = getDescription(schema) ?? leaf;
-  const custom = applyCustomMatchers(semanticHint, config.matchers);
-  if (custom !== undefined) return Number(custom);
+  // Only apply custom matchers and semantic inference in realistic mode
+  if (ctx.mode === "realistic") {
+    const custom = applyCustomMatchers(semanticHint, config.matchers);
+    if (custom !== undefined) return Number(custom);
+  }
 
   const c: NumberConstraints = {};
 
@@ -515,7 +523,9 @@ function dispatchNumber(
   }
 
   if (ctx.mode === "edge") return generateEdgeNumber(c);
-  return generateNumber(c, ctx.rng, ctx.path, semanticHint);
+  // In random mode, skip semantic (name/description) inference — pass null as hint
+  const activeHint = ctx.mode === "random" ? null : semanticHint;
+  return generateNumber(c, ctx.rng, ctx.path, activeHint);
 }
 
 function dispatchBigInt(
@@ -974,6 +984,53 @@ function dispatchLazy(
   // dispatchLazy. Do not increment again here — pass ctx directly to avoid
   // double-incrementing and premature MAX_DEPTH_EXCEEDED errors.
   return dispatch(inner, ctx, config, leaf);
+}
+
+// ---------------------------------------------------------------------------
+// Refinement dispatcher (generate-and-test strategy)
+// ---------------------------------------------------------------------------
+
+const REFINEMENT_MAX_ATTEMPTS = 10;
+
+/**
+ * Generates a value for a schema containing refinements by repeatedly
+ * generating candidates from the base schema (without refinements) and
+ * checking whether they satisfy the full refined schema via safeParse.
+ *
+ * @param schema  - The full refined schema (used for safeParse validation)
+ * @param ctx     - Current generation context
+ * @param config  - Global config
+ * @param leaf    - Leaf key hint for semantic generation
+ * @param isV4Schema - If true, use stripRefinementChecks to get base schema;
+ *                     if false, use getRefinementInner (v3 ZodEffects path)
+ */
+function dispatchRefinement(
+  schema: z.ZodTypeAny,
+  ctx: GenerationContext,
+  config: GlobalConfig,
+  leaf: string | null,
+  isV4Schema: boolean,
+): unknown {
+  const baseSchema = isV4Schema ? stripRefinementChecks(schema) : getRefinementInner(schema);
+
+  for (let attempt = 0; attempt < REFINEMENT_MAX_ATTEMPTS; attempt++) {
+    // Derive a new seed from the current RNG so each attempt gets a distinct candidate
+    const attemptSeed = ctx.rng.nextInt(0, 2 ** 31);
+    const attemptCtx: GenerationContext = {
+      ...ctx,
+      rng: createSeededRNG(attemptSeed),
+    };
+
+    const candidate = dispatch(baseSchema, attemptCtx, config, leaf);
+    const result = schema.safeParse(candidate);
+    if (result.success) return result.data;
+  }
+
+  throw new ZodForgeError(
+    `Could not satisfy refinement at ${formatPath(ctx.path)} after ${REFINEMENT_MAX_ATTEMPTS} attempts. ` +
+      `Consider using a path-based generator to provide a valid value directly.`,
+    "GENERATION_FAILED",
+  );
 }
 
 // ---------------------------------------------------------------------------

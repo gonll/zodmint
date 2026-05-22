@@ -83,7 +83,7 @@ Options:
 
 `useDefaults`, when `true`, returns `.default()` values instead of generating new ones dynamically. Defaults to `false`.
 
-`mode` accepts `"realistic"` (default) or `"edge"`. Passing `"random"` throws `UNSUPPORTED_MODE` with a note about v2. See [Edge Mode](#edge-mode) for details.
+`mode` accepts `"realistic"` (default), `"edge"`, or `"random"`. See [Edge Mode](#edge-mode) and [Random Mode](#random-mode) for details.
 
 One thing worth understanding: `mock()` captures an immutable snapshot of the global config the moment it's called. Calling `configure()` partway through a generation run (say, inside a custom matcher) has no effect on the current call. This makes concurrent usage safe and test isolation predictable.
 
@@ -395,7 +395,7 @@ zod-mock-forge handles the full Zod type system with a few noted exceptions.
 
 `z.unknown()` and `z.any()` produce a random primitive (string, number, or boolean). `z.nan()` returns `NaN` — see the warning below. `z.void()` returns `undefined`.
 
-`z.string().transform(...)` is supported; the transform runs once via `safeParse`. `z.preprocess()` with a non-primitive output, `z.pipe()` (v3), `z.promise()`, `z.symbol()`, `z.never()`, `z.refine()`, `z.superRefine()`, and `z.custom()` all throw `UNSUPPORTED_SCHEMA`.
+`z.string().transform(...)` is supported; the transform runs once via `safeParse`. `z.promise(T)` is supported — it generates `Promise.resolve(value)` where `value` is generated from the inner schema `T`. `z.preprocess()` with a non-primitive output, `z.pipe()` (v3), `z.symbol()`, `z.never()`, and `z.custom()` throw `UNSUPPORTED_SCHEMA`.
 
 ---
 
@@ -422,9 +422,9 @@ try {
 }
 ```
 
-`UNSUPPORTED_SCHEMA` is thrown for `z.never()`, `z.refine()`, `z.preprocess()` (with non-primitive output), `z.pipe()` (v3), `z.promise()`, `z.symbol()`, `z.custom()`, and overrides on transform schemas.
+`UNSUPPORTED_SCHEMA` is thrown for `z.never()`, `z.preprocess()` (with non-primitive output), `z.pipe()` (v3), `z.symbol()`, `z.custom()`, and overrides on transform schemas.
 
-`UNSUPPORTED_MODE` is thrown when `mode` is `"random"` — coming in v2.
+`UNSUPPORTED_MODE` is no longer thrown for any currently supported mode (`"realistic"`, `"edge"`, `"random"`).
 
 `INVALID_OVERRIDE` is thrown when an override produces a value that fails schema validation. The message includes the failing path and a description of the violation.
 
@@ -460,4 +460,8 @@ zod-mock-forge derives the data from the schema itself, so constraints are alway
 
 ## Roadmap
 
-Random mode (`mode: "random"`) is planned for v2. It will disable semantic inference entirely and produce structurally-valid but content-random values — useful for fuzz-style testing where predictable field names shouldn't influence output.
+Random mode (`mode: "random"`) is now implemented. It disables semantic inference entirely and produces structurally-valid but content-random values — useful for fuzz-style testing where predictable field names shouldn't influence output. Hard format constraints (`.email()`, `.uuid()`, etc.) are still respected as they are structural requirements, not semantic hints.
+
+---
+
+Zod v4 uses `new Function()` internally to compile schema validators. If your environment disables `unsafe-eval` (e.g. via CSP), stick with Zod v3.

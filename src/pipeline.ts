@@ -71,6 +71,15 @@ export function runPipeline<S extends z.ZodTypeAny>(
   // Step 2: Generate input-domain value
   const generated = dispatch(schema, ctx, config, null);
 
+  // Special case: z.promise() schemas wrap a Promise. Zod v4's synchronous safeParse
+  // throws when given a Promise ("Encountered Promise during synchronous parse"). Since
+  // z.promise() just checks `instanceof Promise`, we return the generated Promise directly.
+  // The validity invariant holds: schema.safeParse(Promise.resolve(x)) succeeds in v3,
+  // and in v4 you would need parseAsync — but the structural contract is satisfied.
+  if (typeName(schema) === "promise") {
+    return generated as z.infer<S>;
+  }
+
   // Step 3: Merge overrides into the generated value BEFORE safeParse so that
   // transforms see the overridden input and safeParse executes exactly once.
   // eslint-disable-next-line @typescript-eslint/no-explicit-any

@@ -158,3 +158,70 @@ describe("validity contract — additional types", () => {
     }
   });
 });
+
+describe("validity contract — z.refine() and z.superRefine()", () => {
+  it("z.string().refine() with satisfiable condition", () => {
+    const schema = z.string().refine((v) => v.length > 0, "must be non-empty");
+    const result = mock(schema);
+    expect(schema.safeParse(result).success).toBe(true);
+  });
+
+  it("z.number().refine() with satisfiable condition", () => {
+    const schema = z.number().refine((v) => v > 0, "must be positive");
+    const result = mock(schema);
+    expect(result).toBeGreaterThan(0);
+    expect(schema.safeParse(result).success).toBe(true);
+  });
+
+  it("z.object with refine on fields", () => {
+    const schema = z.object({
+      password: z.string().min(8).refine((v) => /[A-Z]/.test(v), "needs uppercase"),
+      age: z.number().int().min(0).max(120).refine((v) => v >= 18, "must be adult"),
+    });
+    const result = mock(schema);
+    expect(schema.safeParse(result).success).toBe(true);
+  });
+
+  it("z.string().superRefine() with satisfiable condition", () => {
+    const schema = z.string().superRefine((v, ctx) => {
+      if (v.length === 0) {
+        ctx.addIssue({ code: z.ZodIssueCode.custom, message: "must not be empty" });
+      }
+    });
+    const result = mock(schema);
+    expect(schema.safeParse(result).success).toBe(true);
+  });
+
+  it("z.number().int().refine() with range condition", () => {
+    const schema = z.number().int().refine((v) => v >= 0 && v <= 100, "must be 0–100");
+    const result = mock(schema);
+    expect(schema.safeParse(result).success).toBe(true);
+    expect(Number.isInteger(result)).toBe(true);
+  });
+
+  it("chained refinements are all satisfied", () => {
+    const schema = z.string()
+      .refine((v) => v.length >= 3, "at least 3 chars")
+      .refine((v) => v.length <= 100, "at most 100 chars");
+    const result = mock(schema);
+    expect(schema.safeParse(result).success).toBe(true);
+  });
+});
+
+describe("validity contract — z.promise()", () => {
+  it("z.promise() generates a Promise", async () => {
+    const schema = z.promise(z.string().email());
+    const result = mock(schema);
+    expect(result).toBeInstanceOf(Promise);
+    const value = await result;
+    expect(z.string().email().safeParse(value).success).toBe(true);
+  });
+
+  it("z.promise(z.object()) generates a valid Promise", async () => {
+    const schema = z.promise(z.object({ id: z.string().uuid() }));
+    const result = mock(schema);
+    expect(result).toBeInstanceOf(Promise);
+    const value = await result;
+    expect(value.id).toMatch(/^[0-9a-f-]{36}$/i);
+  });
+});
