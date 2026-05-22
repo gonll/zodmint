@@ -454,6 +454,20 @@ Without a seed, each call uses a fresh random state. Determinism is guaranteed w
 
 faker is great for generating realistic-looking data but it knows nothing about your schema. A `faker.number.int()` call doesn't know about `.positive()`. `faker.internet.email()` doesn't know about `.max(10)`. Keeping faker-based fixtures valid under schema changes is a constant maintenance burden — and failures are silent until a test runs.
 
+```typescript
+const schema = z.object({
+  age: z.number().min(18).max(30),
+  email: z.string().email(),
+});
+
+const user = {
+  age: faker.number.int(),   // maybe 999
+  email: faker.lorem.word(), // not an email
+};
+
+schema.parse(user); // boom
+```
+
 zod-mock-forge derives the data from the schema itself, so constraints are always satisfied by construction. When the schema changes, the fixtures automatically adapt.
 
 ---
