@@ -1,0 +1,47 @@
+{
+  "name": "zod-forge",
+  "version": "1.0.0",
+  "description": "TypeScript-first schema-valid test fixture generator for Zod schemas",
+  "type": "module",
+  "main": "./dist/index.cjs",
+  "module": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js",
+      "require": "./dist/index.cjs"
+    }
+  },
+  "files": [
+    "dist",
+    "README.md"
+  ],
+  "scripts": {
+    "build": "tsup",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "lint": "tsc --noEmit"
+  },
+  "peerDependencies": {
+    "zod": "^3.23.0"
+  },
+  "devDependencies": {
+    "@types/node": "^20.0.0",
+    "tsup": "^8.0.0",
+    "typescript": "^5.4.0",
+    "vitest": "^1.6.0",
+    "zod": "^3.23.8"
+  },
+  "keywords": [
+    "zod",
+    "mock",
+    "fixture",
+    "factory",
+    "testing",
+    "typescript",
+    "schema",
+    "generator"
+  ],
+  "license": "MIT"
+}
