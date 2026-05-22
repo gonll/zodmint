@@ -1,8 +1,13 @@
 # zodmint
 
-Your schema, is your mock's source of truth.
+[![CI](https://github.com/gonll/zodmint/actions/workflows/ci.yml/badge.svg)](https://github.com/gonll/zodmint/actions/workflows/ci.yml)
+[![npm](https://img.shields.io/npm/v/zodmint)](https://www.npmjs.com/package/zodmint)
+[![npm downloads](https://img.shields.io/npm/dm/zodmint)](https://www.npmjs.com/package/zodmint)
 
-Most test fixture libraries treat schema validation as an afterthought. You hand-write factories, sprinkle in faker calls, and somewhere down the line a test passes locally but blows up in CI because `faker.number.int()` produced a value that fails your `.positive()` constraint. zodmint takes the opposite approach: the schema is the source of truth, and every value it generates is guaranteed to pass `schema.safeParse(output).success === true`.
+Your faker mocks are lying to your tests.
+With Zodmint, your schema is your mock's source of truth.
+
+You hand-write factories, sprinkle in faker calls, and somewhere down the line a test passes locally but blows up in CI because `faker.number.int()` produced a value that fails your `.positive()` constraint. zodmint takes the opposite approach: the schema is the source of truth, and every value it generates is guaranteed to pass `schema.safeParse(output).success === true`.
 
 No more babysitting fixtures. No more silent invalidity.
 
@@ -122,8 +127,8 @@ States are named override presets that you can activate by name at call time. Th
 ```typescript
 const userFactory = mockFactory(UserSchema, {
   states: {
-    admin:    { role: "admin" },
-    guest:    { role: "guest" },
+    admin: { role: "admin" },
+    guest: { role: "guest" },
     inactive: { active: false },
   },
 });
@@ -165,9 +170,11 @@ The hook receives the fully-generated, override-merged value and must return the
 Derives a new factory from an existing one. Override merging, state inheritance, and `afterBuild` chaining are all handled automatically:
 
 ```typescript
-const baseFactory  = mockFactory(UserSchema);
+const baseFactory = mockFactory(UserSchema);
 const adminFactory = baseFactory.extend({ overrides: { role: "admin" } });
-const bannedAdminFactory = adminFactory.extend({ overrides: { active: false } });
+const bannedAdminFactory = adminFactory.extend({
+  overrides: { active: false },
+});
 
 // role === "admin", active === false
 bannedAdminFactory();
@@ -376,8 +383,14 @@ configure({
 
 ```typescript
 const schema = z.object({
-  password: z.string().min(8).refine(v => /[A-Z]/.test(v), "needs uppercase"),
-  age: z.number().int().refine(v => v >= 18, "must be adult"),
+  password: z
+    .string()
+    .min(8)
+    .refine((v) => /[A-Z]/.test(v), "needs uppercase"),
+  age: z
+    .number()
+    .int()
+    .refine((v) => v >= 18, "must be adult"),
 });
 
 const result = mock(schema);
@@ -388,8 +401,12 @@ const result = mock(schema);
 If the refinement is unsatisfiable (always returns false) or extremely selective, increase the retry limit:
 
 ```typescript
-const schema = z.number().int().min(1).max(100)
-  .refine(v => v % 10 === 0, "must be multiple of 10");
+const schema = z
+  .number()
+  .int()
+  .min(1)
+  .max(100)
+  .refine((v) => v % 10 === 0, "must be multiple of 10");
 
 const result = mock(schema, { refinementRetries: 50 });
 ```
@@ -404,7 +421,7 @@ If all retries are exhausted, `ZodForgeError [GENERATION_FAILED]` is thrown with
 
 ```typescript
 const schema = z.object({
-  x: z.string().describe("email"),  // "x" has no semantic meaning — description wins
+  x: z.string().describe("email"), // "x" has no semantic meaning — description wins
   n: z.number().describe("age"),
 });
 
@@ -450,7 +467,7 @@ Pass `mode: "random"` to disable all semantic inference. Field names and `z.desc
 
 ```typescript
 const schema = z.object({
-  email: z.string(),   // no .email() constraint — gets a random string, not an email
+  email: z.string(), // no .email() constraint — gets a random string, not an email
   id: z.string().uuid(), // .uuid() is structural — still generates a UUID
   count: z.number().int().min(0),
 });
@@ -480,7 +497,8 @@ const result = mock(schema, {
   generators: {
     "user.id": () => "test-user-id",
     "user.address.zip": () => "90210",
-    "items.*.sku": () => `SKU-${Math.random().toString(36).slice(2, 6).toUpperCase()}`,
+    "items.*.sku": () =>
+      `SKU-${Math.random().toString(36).slice(2, 6).toUpperCase()}`,
   },
 });
 // result.user.id      → "test-user-id"
@@ -495,7 +513,7 @@ Path-based generators short-circuit all other generation logic — they take pri
 ```typescript
 const users = mockList(UserSchema, {
   count: 5,
-  generators: { "id": () => crypto.randomUUID() },
+  generators: { id: () => crypto.randomUUID() },
 });
 ```
 
@@ -613,7 +631,7 @@ const schema = z.object({
 });
 
 const user = {
-  age: faker.number.int(),   // maybe 999
+  age: faker.number.int(), // maybe 999
   email: faker.lorem.word(), // not an email
 };
 
@@ -688,4 +706,4 @@ zodmint was built with an eye on the existing ecosystem. Three libraries were st
 - [**zod-schema-faker**](https://www.npmjs.com/package/zod-schema-faker) — Faker.js + randexp.js, with seeding support. Inspired zodmint's seeded RNG approach, but still skips some constraints and requires an `install()` call before use.
 - [**interface-forge**](https://www.npmjs.com/package/interface-forge) — the most ergonomic factory API in the space. Its `states`, `afterBuild`, and `extend()` patterns directly inspired the same features in `mockFactory()`. zodmint borrows the factory ergonomics without the Faker.js dependency or bundle size cost.
 
-zodmint's goal is the best of all three: constraint fidelity from first principles, deterministic seeding, and a factory API that scales to real test suites.
+zodmint's goal is the best of all three: constraint fidelity from first principles, deterministic seeding, and a factory API that s
