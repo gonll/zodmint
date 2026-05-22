@@ -1,4 +1,6 @@
+import { z } from "zod";
 import type { GenerationMode } from "./context.js";
+import type { DeepPartial } from "./merge.js";
 
 export interface FieldMatcher {
   /** Regex pattern tested against the leaf key of ctx.path */
@@ -13,8 +15,8 @@ export interface GlobalConfig {
   matchers: FieldMatcher[];
 }
 
-export interface MockOptions {
-  overrides?: Record<string, unknown>;
+export interface MockOptions<S extends z.ZodTypeAny = z.ZodTypeAny> {
+  overrides?: DeepPartial<z.infer<S>>;
   seed?: number;
   maxDepth?: number;
   mode?: GenerationMode;
@@ -48,7 +50,7 @@ export function snapshotConfig(): Readonly<GlobalConfig> {
   return {
     maxDepth: globalConfig.maxDepth,
     useDefaults: globalConfig.useDefaults,
-    matchers: [...globalConfig.matchers],
+    matchers: [...globalConfig.matchers.map(m => ({ ...m }))],
   };
 }
 
@@ -56,7 +58,9 @@ export function configure(options: Partial<GlobalConfig>): void {
   globalConfig = {
     ...globalConfig,
     ...options,
-    matchers: options.matchers ?? globalConfig.matchers,
+    matchers: options.matchers
+      ? options.matchers.map(m => ({ ...m }))
+      : globalConfig.matchers,
   };
 }
 

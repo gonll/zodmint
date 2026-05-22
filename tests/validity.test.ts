@@ -57,6 +57,16 @@ describe("validity contract", () => {
 
   it("z.tuple([z.string(), z.number()])", () => valid(z.tuple([z.string(), z.number()])));
 
+  it("z.tuple with rest element is valid", () => {
+    const schema = z.tuple([z.string(), z.number()]).rest(z.boolean());
+    const result = mock(schema);
+    expect(schema.safeParse(result).success).toBe(true);
+    expect(typeof result[0]).toBe("string");
+    expect(typeof result[1]).toBe("number");
+    // rest elements (if any) should be booleans
+    result.slice(2).forEach(v => expect(typeof v).toBe("boolean"));
+  });
+
   it("z.object({ name: z.string(), age: z.number() })", () =>
     valid(z.object({ name: z.string(), age: z.number() })));
 
@@ -107,4 +117,44 @@ describe("validity contract", () => {
     valid(z.object({ id: z.string(), val: z.number() }).readonly()));
 
   it("z.string().brand<'ID'>()", () => valid(z.string().brand<"ID">()));
+});
+
+describe("validity contract — additional types", () => {
+  it("z.set(z.string())", () => valid(z.set(z.string())));
+
+  it("z.set(z.number().int().positive())", () => valid(z.set(z.number().int().positive())));
+
+  it("z.map(z.string(), z.number())", () => valid(z.map(z.string(), z.number())));
+
+  it("z.map(z.string().uuid(), z.boolean())", () => valid(z.map(z.string().uuid(), z.boolean())));
+
+  it("z.nan() — mock returns NaN and safeParse succeeds", () => {
+    const schema = z.nan();
+    const result = mock(schema);
+    expect(Number.isNaN(result)).toBe(true);
+    expect(schema.safeParse(NaN).success).toBe(true);
+  });
+
+  it("z.coerce.bigint()", () => valid(z.coerce.bigint()));
+
+  it("z.coerce.date()", () => valid(z.coerce.date()));
+
+  it("z.set(z.string()).min(2).max(4) — size is within bounds", () => {
+    for (let i = 0; i < 10; i++) {
+      const schema = z.set(z.string()).min(2).max(4);
+      const result = mock(schema);
+      expect(schema.safeParse(result).success).toBe(true);
+      expect(result.size).toBeGreaterThanOrEqual(2);
+      expect(result.size).toBeLessThanOrEqual(4);
+    }
+  });
+
+  it("z.map(z.string(), z.number()).min(2) — size is at least 2", () => {
+    for (let i = 0; i < 10; i++) {
+      const schema = z.map(z.string(), z.number()).min(2);
+      const result = mock(schema);
+      expect(schema.safeParse(result).success).toBe(true);
+      expect(result.size).toBeGreaterThanOrEqual(2);
+    }
+  });
 });

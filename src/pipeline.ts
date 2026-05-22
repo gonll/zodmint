@@ -54,7 +54,7 @@ export function runPipeline<S extends z.ZodTypeAny>(
   schema: S,
   ctx: GenerationContext,
   config: GlobalConfig,
-  options: MockOptions | undefined,
+  options: MockOptions<S> | undefined,
 ): z.infer<S> {
   const overrides = options?.overrides;
 
@@ -71,10 +71,26 @@ export function runPipeline<S extends z.ZodTypeAny>(
   // Step 2: Generate input-domain value
   const generated = dispatch(schema, ctx, config, null);
 
-  // Step 3: Run safeParse exactly once to get output domain (executes transforms)
-  const parsed = schema.safeParse(generated);
+  // Step 3: Merge overrides into the generated value BEFORE safeParse so that
+  // transforms see the overridden input and safeParse executes exactly once.
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const preParseValue = overrides !== undefined ? deepMerge(generated as any, overrides as any) : generated;
+
+  // Step 4: Run safeParse exactly once to get output domain (executes transforms).
+  const parsed = schema.safeParse(preParseValue);
   if (!parsed.success) {
-    // This is a bug in our generators — surface it clearly
+    // If overrides were present, this is an INVALID_OVERRIDE; otherwise it is a
+    // generator bug.
+    if (overrides !== undefined) {
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const issueList: any[] = (parsed.error as any).issues ?? (parsed.error as any).errors ?? [];
+      const firstError = issueList[0];
+      const errorPath = firstError?.path?.join(".") ?? "<root>";
+      throw new ZodForgeError(
+        `Override at "${errorPath}" failed: ${firstError?.message ?? parsed.error.message}`,
+        "INVALID_OVERRIDE",
+      );
+    }
     throw new ZodForgeError(
       `Generated value at ${formatPath(ctx.path)} failed schema validation: ${parsed.error.message}. ` +
         `This is likely a bug in zod-forge — please report it.`,
@@ -82,28 +98,5 @@ export function runPipeline<S extends z.ZodTypeAny>(
     );
   }
 
-  let result = parsed.data as z.infer<S>;
-
-  // Step 4: Apply overrides (only on non-transform schemas)
-  if (overrides !== undefined) {
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    result = deepMerge(result, overrides as any) as z.infer<S>;
-
-    // Step 5: Validate final overridden result
-    const revalidated = schema.safeParse(result);
-    if (!revalidated.success) {
-      // v4 uses .issues, v3 uses .errors (which is an alias for .issues in v3)
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      const issueList: any[] = (revalidated.error as any).issues ?? (revalidated.error as any).errors ?? [];
-      const firstError = issueList[0];
-      const errorPath = firstError?.path?.join(".") ?? "<root>";
-      throw new ZodForgeError(
-        `Override at "${errorPath}" failed: ${firstError?.message ?? revalidated.error.message}`,
-        "INVALID_OVERRIDE",
-      );
-    }
-    result = revalidated.data as z.infer<S>;
-  }
-
-  return result;
+  return parsed.data as z.infer<S>;
 }

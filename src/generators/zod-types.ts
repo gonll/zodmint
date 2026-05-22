@@ -74,7 +74,17 @@ function dispatch(
   if (Object.keys(ctx.generators).length > 0) {
     const pathKey = ctx.path.join(".");
     const gen = ctx.generators[pathKey];
-    if (gen !== undefined) return gen();
+    if (gen !== undefined) {
+      const genValue = gen();
+      const check = schema.safeParse(genValue);
+      if (!check.success) {
+        throw new ZodForgeError(
+          `Generator at path "${pathKey}" returned an invalid value: ${JSON.stringify(genValue)}`,
+          "INVALID_OVERRIDE",
+        );
+      }
+      return check.data;
+    }
   }
 
   // v4: check for embedded refinement checks (z.refine() becomes a custom check)
@@ -625,8 +635,8 @@ function dispatchNullable(
 ): unknown {
   // Edge mode: always produce null (the boundary case)
   if (ctx.mode === "edge") return null;
-  // Decide BEFORE generating inner value
-  if (!ctx.rng.bool(0.8)) return null;
+  // Decide BEFORE generating inner value — null 20% of the time, inner value 80%
+  if (ctx.rng.bool(0.2)) return null;
   const inner = getInnerType(schema);
   return dispatch(inner, ctx, config, leaf);
 }
@@ -735,16 +745,10 @@ function dispatchIntersection(
 
   const merged = deepMergeForIntersection(leftVal, rightVal);
 
-  // Validate merged result
-  const parsed = schema.safeParse(merged);
-  if (!parsed.success) {
-    throw new ZodForgeError(
-      `Intersection at ${formatPath(ctx.path)} produced an irreconcilable conflict: ${parsed.error.message}`,
-      "GENERATION_FAILED",
-    );
-  }
-
-  return parsed.data;
+  // Return the merged value directly. The outer pipeline's safeParse call will
+  // validate the combined result — calling schema.safeParse here would cause a
+  // double-parse, executing any transforms twice in violation of the core invariant.
+  return merged;
 }
 
 function deepMergeForIntersection(a: unknown, b: unknown): unknown {
@@ -768,10 +772,22 @@ function dispatchTuple(
   config: GlobalConfig,
 ): unknown[] {
   const items = getTupleItems(schema);
-  return items.map((item, i) => {
+  const result: unknown[] = items.map((item, i) => {
     const itemCtx = childCtx(ctx, String(i));
     return dispatch(item, itemCtx, config, leafKey(itemCtx.path));
   });
+
+  // Handle rest element (e.g. z.tuple([z.string()]).rest(z.boolean()))
+  const restSchema = rawDef(schema).rest as z.ZodTypeAny | undefined;
+  if (restSchema) {
+    const restCount = ctx.mode === "edge" ? 0 : ctx.rng.nextInt(1, 3);
+    for (let i = 0; i < restCount; i++) {
+      const restCtx = { ...ctx, path: [...ctx.path, `${result.length}`] };
+      result.push(dispatch(restSchema, restCtx, config, null));
+    }
+  }
+
+  return result;
 }
 
 function dispatchRecord(
@@ -781,9 +797,11 @@ function dispatchRecord(
 ): Record<string, unknown> {
   const keyType = getRecordKeyType(schema);
   const valType = getValueType(schema);
-  const count = ctx.rng.nextInt(2, 4);
+  // Edge mode: empty record is a valid boundary value for z.record()
+  const count = ctx.mode === "edge" ? 0 : ctx.rng.nextInt(2, 4);
   const result: Record<string, unknown> = {};
 
+  // Generate initial pairs
   for (let i = 0; i < count; i++) {
     const keyCtx = childCtx(ctx, `key${i}`);
     const key = String(dispatch(keyType, keyCtx, config, null));
@@ -791,7 +809,58 @@ function dispatchRecord(
     result[key] = dispatch(valType, valCtx, config, leafKey(valCtx.path));
   }
 
+  // Deduplicate: if collisions reduced the key count, retry to fill up to `count`
+  const maxRetries = count * 3;
+  let retries = 0;
+  while (Object.keys(result).length < count && retries < maxRetries) {
+    const keyCtx = childCtx(ctx, `keyRetry${retries}`);
+    const key = String(dispatch(keyType, keyCtx, config, null));
+    if (!(key in result)) {
+      const valCtx = childCtx(ctx, key);
+      result[key] = dispatch(valType, valCtx, config, leafKey(valCtx.path));
+    }
+    retries++;
+  }
+
+  if (Object.keys(result).length < count) {
+    throw new ZodForgeError(
+      `Could not generate ${count} unique record keys at ${formatPath(ctx.path)} after ${maxRetries} retries. ` +
+        `The key type may have too few distinct values.`,
+      "GENERATION_FAILED",
+    );
+  }
+
   return result;
+}
+
+function getSetOrMapBounds(schema: z.ZodTypeAny): {
+  min?: number;
+  max?: number;
+} {
+  if (isV4(schema)) {
+    const def = rawDef(schema);
+    const checks = (def.checks ?? []) as unknown[];
+    let min: number | undefined;
+    let max: number | undefined;
+
+    for (const check of checks) {
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const c = check as any;
+      if (!c._zod) continue;
+      const cd = c._zod.def;
+      if (cd.check === "min_size") min = cd.minimum as number;
+      else if (cd.check === "max_size") max = cd.maximum as number;
+    }
+
+    return { min, max };
+  }
+
+  // v3: Set and Map store bounds as def.minSize / def.maxSize
+  const def = rawDef(schema);
+  return {
+    min: (def.minSize?.value as number | undefined) ?? undefined,
+    max: (def.maxSize?.value as number | undefined) ?? undefined,
+  };
 }
 
 function dispatchMap(
@@ -801,7 +870,21 @@ function dispatchMap(
 ): Map<unknown, unknown> {
   const keyType = getMapKeyType(schema);
   const valType = getValueType(schema);
-  const target = ctx.rng.nextInt(2, 4);
+
+  const { min, max } = getSetOrMapBounds(schema);
+  const minCount = min ?? 2;
+  const maxCount = max ?? 4;
+
+  if (minCount > maxCount) {
+    throw new ZodForgeError(
+      `Unsatisfiable map constraint at ${formatPath(ctx.path)}: min(${minCount}) > max(${maxCount})`,
+      "GENERATION_FAILED",
+    );
+  }
+
+  // Edge mode: use 0 (empty) if no explicit min, otherwise the min
+  const edgeCount = min !== undefined ? minCount : 0;
+  const target = ctx.mode === "edge" ? edgeCount : ctx.rng.nextInt(minCount, maxCount);
   const map = new Map<unknown, unknown>();
 
   // Generate extra attempts to account for duplicate keys
@@ -822,14 +905,37 @@ function dispatchSet(
   config: GlobalConfig,
 ): Set<unknown> {
   const valType = getValueType(schema);
-  const count = ctx.rng.nextInt(2, 4);
+
+  const { min, max } = getSetOrMapBounds(schema);
+  const minCount = min ?? 2;
+  const maxCount = max ?? 4;
+
+  if (minCount > maxCount) {
+    throw new ZodForgeError(
+      `Unsatisfiable set constraint at ${formatPath(ctx.path)}: min(${minCount}) > max(${maxCount})`,
+      "GENERATION_FAILED",
+    );
+  }
+
+  // Edge mode: use 0 (empty) if no explicit min, otherwise the min
+  const edgeCount = min !== undefined ? minCount : 0;
+  const count = ctx.mode === "edge" ? edgeCount : ctx.rng.nextInt(minCount, maxCount);
   const set = new Set<unknown>();
+  const maxAttempts = count * 3;
 
   // Generate more than needed to get unique values
-  for (let i = 0; i < count * 3 && set.size < count; i++) {
+  for (let i = 0; i < maxAttempts && set.size < count; i++) {
     const itemCtx = arrayItemCtx(ctx);
     const val = dispatch(valType, itemCtx, config, null);
     set.add(val);
+  }
+
+  if (set.size < count) {
+    throw new ZodForgeError(
+      `Could not generate ${count} unique set items at ${formatPath(ctx.path)} after ${maxAttempts} attempts. ` +
+        `The value type may have too few distinct values (e.g. z.boolean().min(3)).`,
+      "GENERATION_FAILED",
+    );
   }
 
   return set;
@@ -864,10 +970,10 @@ function dispatchLazy(
 
   const getter = getLazyGetter(schema);
   const inner = getter();
-  // Depth was already incremented by the caller's childCtx/arrayItemCtx.
-  // We increment here specifically for lazy since lazy is the recursion boundary.
-  const deeperCtx: GenerationContext = { ...ctx, depth: ctx.depth + 1 };
-  return dispatch(inner, deeperCtx, config, leaf);
+  // The caller's childCtx/arrayItemCtx already incremented depth before reaching
+  // dispatchLazy. Do not increment again here — pass ctx directly to avoid
+  // double-incrementing and premature MAX_DEPTH_EXCEEDED errors.
+  return dispatch(inner, ctx, config, leaf);
 }
 
 // ---------------------------------------------------------------------------

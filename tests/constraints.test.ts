@@ -181,6 +181,48 @@ describe("string constraints", () => {
       expect(schema.safeParse(s).success).toBe(true);
     }
   });
+
+  it("regex + min conflict throws GENERATION_FAILED", () => {
+    // regex /^X/ generates a very short string; min(100) can never be satisfied
+    const schema = z.string().regex(/^X/).min(100);
+    expect(() => mock(schema)).toThrow(ZodForgeError);
+    try {
+      mock(schema);
+    } catch (e) {
+      expect((e as ZodForgeError).code).toBe("GENERATION_FAILED");
+      expect((e as ZodForgeError).message).toContain("regex");
+      expect((e as ZodForgeError).message).toContain("min(100)");
+    }
+  });
+
+  it("regex + max conflict throws GENERATION_FAILED", () => {
+    // regex /^[A-Z]{20}$/ generates a 20-char string; max(5) can never be satisfied
+    const schema = z.string().regex(/^[A-Z]{20}$/).max(5);
+    expect(() => mock(schema)).toThrow(ZodForgeError);
+    try {
+      mock(schema);
+    } catch (e) {
+      expect((e as ZodForgeError).code).toBe("GENERATION_FAILED");
+      expect((e as ZodForgeError).message).toContain("regex");
+      expect((e as ZodForgeError).message).toContain("max(5)");
+    }
+  });
+
+  it("regex + compatible min does NOT throw", () => {
+    // /^[A-Z]{5}$/ always generates exactly 5 chars — min(5) is satisfiable
+    const schema = z.string().regex(/^[A-Z]{5}$/).min(5);
+    expect(() => mock(schema)).not.toThrow();
+    const s = mock(schema);
+    expect(schema.safeParse(s).success).toBe(true);
+  });
+
+  it("regex + compatible max does NOT throw", () => {
+    // /^[A-Z]{3}$/ always generates exactly 3 chars — max(10) is satisfiable
+    const schema = z.string().regex(/^[A-Z]{3}$/).max(10);
+    expect(() => mock(schema)).not.toThrow();
+    const s = mock(schema);
+    expect(schema.safeParse(s).success).toBe(true);
+  });
 });
 
 describe("number constraints", () => {

@@ -17,7 +17,7 @@ import { runPipeline } from "./pipeline.js";
  */
 export function mock<S extends z.ZodTypeAny>(
   schema: S,
-  options?: MockOptions,
+  options?: MockOptions<S>,
 ): z.infer<S> {
   // Step 1: Capture immutable config snapshot
   const config = snapshotConfig();
@@ -58,9 +58,17 @@ export function mock<S extends z.ZodTypeAny>(
  */
 export function mockList<S extends z.ZodTypeAny>(
   schema: S,
-  options?: MockOptions & { count?: number },
+  options?: MockOptions<S> & { count?: number },
 ): z.infer<S>[] {
-  const count = options?.count ?? createRandomRNG().nextInt(1, 5);
+  let count: number;
+  if (options?.count !== undefined) {
+    count = options.count;
+  } else if (options?.seed !== undefined) {
+    // Derive count from the seeded RNG so it is deterministic with the same seed
+    count = createSeededRNG(options.seed).nextInt(1, 5);
+  } else {
+    count = createRandomRNG().nextInt(1, 5);
+  }
 
   return Array.from({ length: count }, (_, i) =>
     mock(schema, {

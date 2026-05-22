@@ -284,4 +284,70 @@ describe("path-based generators", () => {
     });
     results.forEach(r => expect(r.id).toBe("fixed-id"));
   });
+
+  it("generator returning invalid value throws with path in message", () => {
+    const schema = z.object({ age: z.number().positive() });
+    expect(() =>
+      mock(schema, { generators: { "age": () => -5 } })
+    ).toThrow(ZodForgeError);
+    try {
+      mock(schema, { generators: { "age": () => -5 } });
+    } catch (e) {
+      expect((e as ZodForgeError).message).toContain("age");
+    }
+  });
+});
+
+// ---------------------------------------------------------------------------
+// mode: "edge" — additional types
+// ---------------------------------------------------------------------------
+
+describe('mode: "edge" — additional types', () => {
+  it("z.literal in edge mode returns the literal value and passes safeParse", () => {
+    const schema = z.literal("hello");
+    const result = mock(schema, { mode: "edge" });
+    expect(result).toBe("hello");
+    expect(schema.safeParse(result).success).toBe(true);
+  });
+
+  it("z.enum in edge mode returns a valid enum member and passes safeParse", () => {
+    const schema = z.enum(["a", "b", "c"]);
+    const result = mock(schema, { mode: "edge" });
+    expect(["a", "b", "c"]).toContain(result);
+    expect(schema.safeParse(result).success).toBe(true);
+  });
+
+  it("z.union in edge mode passes safeParse", () => {
+    const schema = z.union([z.string(), z.number()]);
+    const result = mock(schema, { mode: "edge" });
+    expect(schema.safeParse(result).success).toBe(true);
+  });
+
+  it("z.record in edge mode passes safeParse", () => {
+    const schema = z.record(z.string(), z.number());
+    const result = mock(schema, { mode: "edge" });
+    expect(schema.safeParse(result).success).toBe(true);
+  });
+
+  it("z.tuple in edge mode passes safeParse", () => {
+    const schema = z.tuple([z.string(), z.number()]);
+    const result = mock(schema, { mode: "edge" });
+    expect(schema.safeParse(result).success).toBe(true);
+  });
+
+  it("z.set in edge mode produces empty Set and passes safeParse", () => {
+    const schema = z.set(z.string());
+    const result = mock(schema, { mode: "edge" });
+    expect(result).toBeInstanceOf(Set);
+    expect(result.size).toBe(0);
+    expect(schema.safeParse(result).success).toBe(true);
+  });
+
+  it("z.map in edge mode produces empty Map and passes safeParse", () => {
+    const schema = z.map(z.string(), z.number());
+    const result = mock(schema, { mode: "edge" });
+    expect(result).toBeInstanceOf(Map);
+    expect(result.size).toBe(0);
+    expect(schema.safeParse(result).success).toBe(true);
+  });
 });

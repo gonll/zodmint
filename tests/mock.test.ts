@@ -135,6 +135,16 @@ describe("mock()", () => {
     expect(typeof result).toBe("string");
     expect(result).toBe(result.toUpperCase());
   });
+
+  it("useDefaults: true calls function defaults", () => {
+    let callCount = 0;
+    const schema = z.object({
+      id: z.string().default(() => { callCount++; return "fn-default"; }),
+    });
+    const result = mock(schema, { useDefaults: true });
+    expect(result.id).toBe("fn-default");
+    expect(callCount).toBe(1);
+  });
 });
 
 describe("mockList()", () => {
@@ -175,5 +185,13 @@ describe("mockList()", () => {
     const UserSchema = z.object({ id: z.string() });
     const users = mockList(UserSchema, { count: 10 });
     expect(users).toHaveLength(10);
+  });
+
+  it("mockList with seed but no count is deterministic", () => {
+    const schema = z.object({ name: z.string() });
+    const a = mockList(schema, { seed: 99 });
+    const b = mockList(schema, { seed: 99 });
+    expect(a.length).toBe(b.length);
+    expect(a).toEqual(b);
   });
 });

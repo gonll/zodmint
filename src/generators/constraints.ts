@@ -433,7 +433,17 @@ export function generateEdgeNumber(c: NumberConstraints): number {
       if (c.gt !== undefined && v <= c.gt) return false;
       if (c.lt !== undefined && v >= c.lt) return false;
       if (c.int && !Number.isInteger(v)) return false;
-      if (c.multipleOf !== undefined && v % c.multipleOf !== 0) return false;
+      if (c.multipleOf !== undefined) {
+        const m = c.multipleOf;
+        const remainder = v % m;
+        // For fractional multipleOf, round remainder to m's precision before comparing
+        if (Number.isInteger(m)) {
+          if (remainder !== 0) return false;
+        } else {
+          const precision = (m.toString().split(".")[1] ?? "").length;
+          if (parseFloat(remainder.toFixed(precision)) !== 0) return false;
+        }
+      }
       return true;
     });
 
@@ -541,14 +551,22 @@ export function generateString(
 
   if (c.regex) {
     const generated = generateFromRegex(c.regex, rng, path);
-    // Validate regex result against constraints — fall back if it can't satisfy them
+    // Validate regex result against length constraints — throw if irreconcilable
     if (c.min !== undefined && generated.length < c.min) {
-      // Can't satisfy both regex + min, fall through to generic
-    } else if (c.max !== undefined && generated.length > c.max) {
-      // Can't satisfy both regex + max, fall through to generic
-    } else {
-      return generated;
+      throw new ZodForgeError(
+        `Cannot satisfy both regex /${c.regex.source}/ and min(${c.min}) constraints at ${formatPath(path)}: ` +
+          `regex produced a string of length ${generated.length} which is shorter than min(${c.min})`,
+        "GENERATION_FAILED",
+      );
     }
+    if (c.max !== undefined && generated.length > c.max) {
+      throw new ZodForgeError(
+        `Cannot satisfy both regex /${c.regex.source}/ and max(${c.max}) constraints at ${formatPath(path)}: ` +
+          `regex produced a string of length ${generated.length} which is longer than max(${c.max})`,
+        "GENERATION_FAILED",
+      );
+    }
+    return generated;
   }
 
   // Semantic inference — only if it satisfies constraints
@@ -770,7 +788,13 @@ export function generateNumber(
         "GENERATION_FAILED",
       );
     }
-    return rng.nextInt(lo, hi) * m;
+    const raw = rng.nextInt(lo, hi) * m;
+    // Round to the precision of m to fix floating-point drift (e.g. 3 * 0.1 === 0.30000000000000004)
+    if (!Number.isInteger(m)) {
+      const precision = (m.toString().split(".")[1] ?? "").length;
+      return parseFloat(raw.toFixed(precision));
+    }
+    return raw;
   }
 
   if (c.int) {
@@ -914,8 +938,10 @@ export function generateBigInt(
         "GENERATION_FAILED",
       );
     }
-    const lo = min / m + (min % m !== 0n && min > 0n ? 1n : 0n);
-    const hi = max / m - (max % m !== 0n && max < 0n ? 1n : 0n);
+    // Ceiling division: smallest k such that k*m >= min
+    const lo = min % m === 0n ? min / m : min > 0n ? min / m + 1n : min / m;
+    // Floor division: largest k such that k*m <= max
+    const hi = max % m === 0n ? max / m : max < 0n ? max / m - 1n : max / m;
     const range = Number(hi - lo);
     if (range < 0) {
       throw new ZodForgeError(

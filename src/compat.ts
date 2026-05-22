@@ -8,6 +8,7 @@
  */
 
 import { z } from "zod";
+import { ZodForgeError } from "./errors.js";
 
 // ---------------------------------------------------------------------------
 // Version detection
@@ -160,6 +161,12 @@ export function getInnerType(schema: z.ZodTypeAny): z.ZodTypeAny {
   const def = rawDef(schema);
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const inner = def.innerType ?? def.schema;
+  if (inner === undefined) {
+    throw new ZodForgeError(
+      `Cannot unwrap schema at path: unexpected schema structure (missing innerType/schema)`,
+      "UNSUPPORTED_SCHEMA",
+    );
+  }
   return inner as z.ZodTypeAny;
 }
 

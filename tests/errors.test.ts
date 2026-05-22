@@ -114,16 +114,14 @@ describe("UNSUPPORTED_SCHEMA errors", () => {
 });
 
 describe("UNSUPPORTED_MODE errors", () => {
-  it("mode: 'edge' throws with 'v2' mention", () => {
-    try {
-      mock(z.string(), { mode: "edge" });
-    } catch (e) {
-      expect((e as ZodForgeError).code).toBe("UNSUPPORTED_MODE");
-      expect((e as ZodForgeError).message).toMatch(/v2/i);
-    }
+  it("mode: 'edge' does not throw — it generates boundary values", () => {
+    expect(() => mock(z.string(), { mode: "edge" })).not.toThrow();
+    const result = mock(z.string(), { mode: "edge" });
+    expect(z.string().safeParse(result).success).toBe(true);
   });
 
   it("mode: 'random' throws UNSUPPORTED_MODE", () => {
+    expect(() => mock(z.string(), { mode: "random" })).toThrow(ZodForgeError);
     try {
       mock(z.string(), { mode: "random" });
     } catch (e) {
@@ -150,11 +148,28 @@ describe("INVALID_OVERRIDE errors", () => {
 
 describe("REGEX_UNSUPPORTED errors", () => {
   it("throws with description of what pattern was rejected", () => {
+    // Lookahead patterns are unsupported and must throw REGEX_UNSUPPORTED
+    const schema = z.string().regex(/(?=\d)/);
+    expect(() => mock(schema)).toThrow(ZodForgeError);
     try {
-      mock(z.string().regex(/\d+/));
+      mock(schema);
     } catch (e) {
       expect((e as ZodForgeError).code).toBe("REGEX_UNSUPPORTED");
       expect((e as ZodForgeError).message).toMatch(/regex/i);
+    }
+  });
+});
+
+describe("GENERATION_FAILED errors", () => {
+  it("z.intersection with conflicting field types throws GENERATION_FAILED", () => {
+    // x must be both string and number — impossible
+    const schema = z.intersection(
+      z.object({ x: z.string() }),
+      z.object({ x: z.number() }),
+    );
+    expect(() => mock(schema)).toThrow(ZodForgeError);
+    try { mock(schema); } catch (e) {
+      expect((e as ZodForgeError).code).toBe("GENERATION_FAILED");
     }
   });
 });

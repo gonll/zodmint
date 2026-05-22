@@ -62,4 +62,17 @@ describe("mockFactory()", () => {
     // Same factory with same seed should produce same output
     expect(a).toEqual(b);
   });
+
+  it("deep-merges nested overrides from base and call", () => {
+    const schema = z.object({
+      user: z.object({ role: z.string(), name: z.string() }),
+    });
+    const createUser = mockFactory(schema, {
+      overrides: { user: { role: "admin" } },
+    });
+    const result = createUser({ overrides: { user: { name: "Alice" } } });
+    expect(result.user.role).toBe("admin");   // base preserved
+    expect(result.user.name).toBe("Alice");   // call wins
+    expect(schema.safeParse(result).success).toBe(true);
+  });
 });

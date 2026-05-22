@@ -30,7 +30,9 @@ export function deepMerge<T>(base: T, overrides: DeepPartial<T>): T {
   return result as T;
 }
 
-type DeepPartial<T> = T extends object
+export type DeepPartial<T> = T extends (infer U)[]
+  ? DeepPartial<U>[]
+  : T extends object
   ? { [K in keyof T]?: DeepPartial<T[K]> }
   : T;
 
