@@ -25,6 +25,8 @@ export interface GenerationContext {
   rng: SeededRNG;
   mode: GenerationMode;
   useDefaults: boolean;
+  /** Path-based generator overrides, keyed by dot-joined path (e.g. "user.address.zip") */
+  generators: Record<string, () => unknown>;
 }
 
 /** mulberry32 seeded PRNG */

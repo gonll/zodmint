@@ -1,6 +1,8 @@
-# zod-forge
+# zod-mock-forge
 
-Most test fixture libraries treat schema validation as an afterthought. You hand-write factories, sprinkle in faker calls, and somewhere down the line a test passes locally but blows up in CI because `faker.number.int()` produced a value that fails your `.positive()` constraint. zod-forge takes the opposite approach: the schema is the source of truth, and every value it generates is guaranteed to pass `schema.safeParse(output).success === true`.
+Your schema, is your mock's source of truth.
+
+Most test fixture libraries treat schema validation as an afterthought. You hand-write factories, sprinkle in faker calls, and somewhere down the line a test passes locally but blows up in CI because `faker.number.int()` produced a value that fails your `.positive()` constraint. zod-mock-forge takes the opposite approach: the schema is the source of truth, and every value it generates is guaranteed to pass `schema.safeParse(output).success === true`.
 
 No more babysitting fixtures. No more silent invalidity.
 
@@ -8,20 +10,28 @@ No more babysitting fixtures. No more silent invalidity.
 
 ## How it works
 
-You pass a Zod schema in, you get a valid value out. That's the whole contract. Internally, zod-forge walks the schema definition, resolves constraints, applies semantic inference from field names, and runs a single `safeParse` to get the fully-transformed output type. The result is always typed as `z.infer<typeof schema>` — no `any`, no casting.
+You pass a Zod schema in, you get a valid value out. That's the whole contract.
+
+Do you need a user?
 
 ```typescript
-import { mock } from "zod-forge"
-import { z } from "zod"
+const user = mock(UserSchema);
+```
+
+Internally, zod-mock-forge walks the schema definition, resolves constraints, applies semantic inference from field names, and runs a single `safeParse` to get the fully-transformed output type. The result is always typed as `z.infer<typeof schema>` — no `any`, no casting.
+
+```typescript
+import { mock } from "zod-mock-forge";
+import { z } from "zod";
 
 const UserSchema = z.object({
   id: z.string().uuid(),
   email: z.string().email(),
   age: z.number().int().min(18).max(99),
   active: z.boolean(),
-})
+});
 
-const user = mock(UserSchema)
+const user = mock(UserSchema);
 // { id: "3f2e1d4c-...", email: "alice23@example.com", age: 34, active: true }
 ```
 
@@ -30,7 +40,7 @@ const user = mock(UserSchema)
 ## Installation
 
 ```bash
-npm install zod-forge
+npm install zod-mock-forge
 ```
 
 zod is a peer dependency, so make sure it's already in your project:
@@ -50,9 +60,9 @@ Requires zod `>=3.23.0`. Zod v3 and v4 are both supported.
 The primary function. Generates a single value from any Zod schema.
 
 ```typescript
-import { mock } from "zod-forge"
+import { mock } from "zod-mock-forge";
 
-const user = mock(UserSchema)
+const user = mock(UserSchema);
 
 const user = mock(UserSchema, {
   overrides: { email: "custom@test.com" },
@@ -60,12 +70,12 @@ const user = mock(UserSchema, {
   maxDepth: 3,
   useDefaults: true,
   mode: "realistic",
-})
+});
 ```
 
 Options:
 
-`overrides` lets you pin specific fields while letting zod-forge fill in the rest. Overrides are deep-merged, so you can target nested fields without recreating the entire object. If an override produces a value that fails schema validation, a `ZodForgeError [INVALID_OVERRIDE]` is thrown with the path and failing value clearly named.
+`overrides` lets you pin specific fields while letting zod-mock-forge fill in the rest. Overrides are deep-merged, so you can target nested fields without recreating the entire object. If an override produces a value that fails schema validation, a `ZodForgeError [INVALID_OVERRIDE]` is thrown with the path and failing value clearly named.
 
 `seed` makes generation deterministic. Same seed on the same schema produces the same output every time — useful for snapshot tests and reproducible bug reports. Determinism is guaranteed within a major version, but not across major versions (generators can be improved between releases).
 
@@ -73,7 +83,7 @@ Options:
 
 `useDefaults`, when `true`, returns `.default()` values instead of generating new ones dynamically. Defaults to `false`.
 
-`mode` accepts `"realistic"` only in v1. Passing `"edge"` or `"random"` throws `UNSUPPORTED_MODE` with a note about v2.
+`mode` accepts `"realistic"` (default) or `"edge"`. Passing `"random"` throws `UNSUPPORTED_MODE` with a note about v2. See [Edge Mode](#edge-mode) for details.
 
 One thing worth understanding: `mock()` captures an immutable snapshot of the global config the moment it's called. Calling `configure()` partway through a generation run (say, inside a custom matcher) has no effect on the current call. This makes concurrent usage safe and test isolation predictable.
 
@@ -84,12 +94,12 @@ One thing worth understanding: `mock()` captures an immutable snapshot of the gl
 Returns a reusable factory function. Useful when you need multiple instances of the same shape with per-call variation.
 
 ```typescript
-import { mockFactory } from "zod-forge"
+import { mockFactory } from "zod-mock-forge";
 
-const createUser = mockFactory(UserSchema)
+const createUser = mockFactory(UserSchema);
 
-const user1 = createUser()
-const user2 = createUser({ overrides: { name: "Carol" } })
+const user1 = createUser();
+const user2 = createUser({ overrides: { name: "Carol" } });
 ```
 
 Base options provided to `mockFactory` apply to every call. Per-call options are merged on top, with per-call values winning conflicts:
@@ -97,9 +107,9 @@ Base options provided to `mockFactory` apply to every call. Per-call options are
 ```typescript
 const createActiveUser = mockFactory(UserSchema, {
   overrides: { active: true },
-})
+});
 
-const user = createActiveUser({ overrides: { name: "Dave" } })
+const user = createActiveUser({ overrides: { name: "Dave" } });
 // user.active === true (from base), user.name === "Dave" (from call)
 ```
 
@@ -110,14 +120,14 @@ const user = createActiveUser({ overrides: { name: "Dave" } })
 Generates an array of individual fixtures — not to be confused with `mock(z.array(schema))`.
 
 ```typescript
-import { mockList } from "zod-forge"
+import { mockList } from "zod-mock-forge";
 
-const users = mockList(UserSchema)               // 1–5 items
-const users = mockList(UserSchema, { count: 10 })
+const users = mockList(UserSchema); // 1–5 items
+const users = mockList(UserSchema, { count: 10 });
 const users = mockList(UserSchema, {
   count: 3,
   overrides: { active: true },
-})
+});
 ```
 
 The distinction matters: `mockList(UserSchema)` calls `mock(UserSchema)` N times, each independently. `mock(z.array(UserSchema))` treats the array schema as the thing to generate, respecting `.min()`, `.max()`, and `.length()` constraints on the array itself.
@@ -129,15 +139,18 @@ The distinction matters: `mockList(UserSchema)` calls `mock(UserSchema)` N times
 Sets global defaults that apply to every `mock()` call. Useful for test suite-level configuration.
 
 ```typescript
-import { configure } from "zod-forge"
+import { configure } from "zod-mock-forge";
 
 configure({
   maxDepth: 3,
   useDefaults: false,
   matchers: [
-    { pattern: /sku/i, generate: () => `SKU-${Math.floor(Math.random() * 9999)}` },
+    {
+      pattern: /sku/i,
+      generate: () => `SKU-${Math.floor(Math.random() * 9999)}`,
+    },
   ],
-})
+});
 ```
 
 ---
@@ -147,16 +160,16 @@ configure({
 Resets everything back to defaults. Call this in `afterEach` to keep tests isolated:
 
 ```typescript
-import { resetConfig } from "zod-forge"
+import { resetConfig } from "zod-mock-forge";
 
-afterEach(() => resetConfig())
+afterEach(() => resetConfig());
 ```
 
 ---
 
 ## Semantic Inference
 
-When no explicit format constraint is present, zod-forge looks at the field name (the leaf key of the path) and tries to produce something meaningful. An `email` field gets a valid email address. An `age` field gets an integer between 18 and 80. A `createdAt` field gets an ISO date string.
+When no explicit format constraint is present, zod-mock-forge looks at the field name (the leaf key of the path) and tries to produce something meaningful. An `email` field gets a valid email address. An `age` field gets an integer between 18 and 80. A `createdAt` field gets an ISO date string.
 
 This is entirely opt-in by nature — it just works based on naming conventions you probably already follow.
 
@@ -181,13 +194,20 @@ If the built-in semantic patterns don't cover your domain, you can register cust
 ```typescript
 configure({
   matchers: [
-    { pattern: /sku/i,    generate: () => `SKU-${String(Math.random()).slice(2, 6)}` },
+    {
+      pattern: /sku/i,
+      generate: () => `SKU-${String(Math.random()).slice(2, 6)}`,
+    },
     { pattern: /status/i, generate: () => "active" },
-    { pattern: /region/i, generate: () => ["us-east", "eu-west", "ap-south"][Math.floor(Math.random() * 3)] },
+    {
+      pattern: /region/i,
+      generate: () =>
+        ["us-east", "eu-west", "ap-south"][Math.floor(Math.random() * 3)],
+    },
   ],
-})
+});
 
-const product = mock(ProductSchema)
+const product = mock(ProductSchema);
 // product.sku    → "SKU-4821"
 // product.status → "active"
 ```
@@ -198,7 +218,7 @@ Matchers are tested in order and the first match wins.
 
 ## Constraints
 
-zod-forge handles all standard Zod constraints. Here's the full picture:
+zod-mock-forge handles all standard Zod constraints. Here's the full picture:
 
 **Strings:** `.min(n)` produces at least n characters. `.max(n)` caps at n characters. `.length(n)` produces exactly n characters. `.email()` produces a valid email. `.url()` produces a valid URL. `.uuid()` produces a UUID v4. `.startsWith(s)` and `.endsWith(s)` are respected. `.cuid()`, `.cuid2()`, `.ulid()`, `.nanoid()`, `.jwt()`, `.datetime()`, `.date()` (YYYY-MM-DD), `.time()` (HH:MM:SS), `.duration()` (ISO 8601), `.ip()` / `.ipv4()` / `.ipv6()`, `.cidrv4()` / `.cidrv6()`, `.emoji()`, `.base64()`, and `.base64url()` all produce format-correct values.
 
@@ -221,11 +241,11 @@ Unsatisfiable combinations — `.min(10).max(5)`, `.positive().negative()`, `.em
 **Supported:** literals, character classes `[a-z]` / `[A-Z0-9_]`, negated classes `[^aeiou]`, shorthand classes `\d` / `\w` / `\s` and their inverses `\D` / `\W` / `\S`, word boundaries `\b` / `\B` (zero-width, no output), the dot `.` (any printable char), alternation `(foo|bar|baz)` and top-level `cat|dog|fish`, non-capturing groups `(?:...)`, quantifiers `?` / `*` / `+` / `{n}` / `{n,m}`, lazy quantifiers (`+?`, `*?`), anchors `^` / `$`.
 
 ```typescript
-mock(z.string().regex(/^\d{5}$/))          // "94103"
-mock(z.string().regex(/^\d{3}-\d{4}$/))   // "415-8271"
-mock(z.string().regex(/^\d+\.\d{2}$/))    // "42.99"
-mock(z.string().regex(/^[A-Z]{2}\d{4}$/)) // "BC1947"
-mock(z.string().regex(/^#[0-9a-fA-F]{6}$/)) // "#3af1c8"
+mock(z.string().regex(/^\d{5}$/)); // "94103"
+mock(z.string().regex(/^\d{3}-\d{4}$/)); // "415-8271"
+mock(z.string().regex(/^\d+\.\d{2}$/)); // "42.99"
+mock(z.string().regex(/^[A-Z]{2}\d{4}$/)); // "BC1947"
+mock(z.string().regex(/^#[0-9a-fA-F]{6}$/)); // "#3af1c8"
 ```
 
 **Still throws `REGEX_UNSUPPORTED`:** lookahead / lookbehind (`(?=...)`, `(?!...)`), backreferences (`\1`), named capture groups (`(?<name>...)`), unicode properties (`\p{...}`), possessive quantifiers (`++`).
@@ -235,9 +255,96 @@ For genuinely unsupported patterns, register a custom matcher instead:
 ```typescript
 configure({
   matchers: [
-    { pattern: /postalCode/i, generate: () => String(Math.floor(Math.random() * 90000) + 10000) },
+    {
+      pattern: /postalCode/i,
+      generate: () => String(Math.floor(Math.random() * 90000) + 10000),
+    },
   ],
-})
+});
+```
+
+---
+
+## Schema Descriptions as Semantic Hints
+
+`z.describe()` lets you attach a semantic hint directly to a schema. zod-mock-forge reads it and uses it as a generation hint, taking priority over the field name:
+
+```typescript
+const schema = z.object({
+  x: z.string().describe("email"),  // "x" has no semantic meaning — description wins
+  n: z.number().describe("age"),
+});
+
+const result = mock(schema);
+// result.x → "alice23@example.com"
+// result.n → 34
+```
+
+Any description that matches a built-in semantic pattern works — `"email"`, `"uuid"`, `"url"`, `"firstName"`, `"price"`, `"age"`, and so on. Descriptions that don't match any pattern fall back to generic type-based generation. Descriptions never override explicit format constraints like `.email()` or `.uuid()`.
+
+Priority order: path-based generator → explicit format constraint → custom matcher → schema description → field name → generic generation.
+
+---
+
+## Edge Mode
+
+Pass `mode: "edge"` to generate boundary values instead of realistic ones. Useful for testing schema validation logic, catching off-by-one bugs, and exercising constraint boundaries.
+
+```typescript
+const schema = z.object({
+  name: z.string().min(2).max(50),
+  age: z.number().int().min(0).max(150),
+  active: z.boolean(),
+  tags: z.array(z.string()),
+  nickname: z.string().optional(),
+});
+
+const edge = mock(schema, { mode: "edge" });
+// { name: "aa", age: 0, active: false, tags: [], nickname: undefined }
+```
+
+The boundary rules:
+
+Strings produce the minimum-length value (all `"a"`s), or the canonical shortest form for format constraints (`"a@b.co"` for email, `"http://a.co"` for url, `"00000000-0000-4000-8000-000000000000"` for uuid). Numbers produce the minimum value when constrained, `0` otherwise. Booleans produce `false`. Optionals produce `undefined`. Nullables produce `null`. Arrays produce `[]` when unconstrained, or exactly `min` items when `.min()` is set. Dates produce epoch (`new Date(0)`). BigInts produce `0n`.
+
+Edge mode composes with all other options — seeds, overrides, and path-based generators all still apply.
+
+---
+
+## Path-Based Generators
+
+The `generators` option pins specific fields to custom generation functions. Keys are dot-separated paths matching the schema's field structure. Use `*` for array element positions.
+
+```typescript
+const schema = z.object({
+  user: z.object({
+    id: z.string().uuid(),
+    address: z.object({ zip: z.string() }),
+  }),
+  items: z.array(z.object({ sku: z.string() })),
+});
+
+const result = mock(schema, {
+  generators: {
+    "user.id": () => "test-user-id",
+    "user.address.zip": () => "90210",
+    "items.*.sku": () => `SKU-${Math.random().toString(36).slice(2, 6).toUpperCase()}`,
+  },
+});
+// result.user.id      → "test-user-id"
+// result.user.address.zip → "90210"
+// result.items[0].sku → "SKU-4A3F"  (and so on for each item)
+```
+
+Path-based generators short-circuit all other generation logic — they take priority over semantic inference, `z.describe()`, and format constraints. The return value is used as-is; no `safeParse` is re-run on the individual field.
+
+`mockList` passes the same `generators` option to every call:
+
+```typescript
+const users = mockList(UserSchema, {
+  count: 5,
+  generators: { "id": () => crypto.randomUUID() },
+});
 ```
 
 ---
@@ -250,10 +357,10 @@ Overrides use a deep partial merge. Plain objects are merged recursively. Arrays
 const result = mock(UserSchema, {
   overrides: {
     address: { city: "New York" }, // only city is overridden, other address fields are generated
-    tags: ["admin"],               // entire tags array is replaced
-    nickname: undefined,           // ignored — generated value is used
+    tags: ["admin"], // entire tags array is replaced
+    nickname: undefined, // ignored — generated value is used
   },
-})
+});
 ```
 
 Overrides are not supported on schemas containing `.transform()`. The output of a transform is in a different domain than the input, so merging into it safely isn't possible in v1. Attempting it throws `ZodForgeError [UNSUPPORTED_SCHEMA]` with a clear explanation.
@@ -262,7 +369,7 @@ Overrides are not supported on schemas containing `.transform()`. The output of 
 
 ## Zod Type Coverage
 
-zod-forge handles the full Zod type system with a few noted exceptions.
+zod-mock-forge handles the full Zod type system with a few noted exceptions.
 
 `z.string()`, `z.number()`, `z.boolean()`, `z.bigint()`, `z.date()` — full constraint support.
 
@@ -284,7 +391,7 @@ zod-forge handles the full Zod type system with a few noted exceptions.
 
 `z.readonly(T)` ignores the readonly wrapper and generates from the inner type. `z.string().brand<B>()` and `z.number().brand<B>()` ignore the brand and generate the underlying type.
 
-`z.coerce.string()`, `z.coerce.number()`, `z.coerce.boolean()`, `z.coerce.bigint()`, and `z.coerce.date()` are fully supported — zod-forge generates the target type directly. The coerce transform is a no-op on a value that's already the correct native type, so `safeParse` always succeeds.
+`z.coerce.string()`, `z.coerce.number()`, `z.coerce.boolean()`, `z.coerce.bigint()`, and `z.coerce.date()` are fully supported — zod-mock-forge generates the target type directly. The coerce transform is a no-op on a value that's already the correct native type, so `safeParse` always succeeds.
 
 `z.unknown()` and `z.any()` produce a random primitive (string, number, or boolean). `z.nan()` returns `NaN` — see the warning below. `z.void()` returns `undefined`.
 
@@ -303,21 +410,21 @@ zod-forge handles the full Zod type system with a few noted exceptions.
 All errors are instances of `ZodForgeError` and carry a `code` property. Error messages always include the schema path.
 
 ```typescript
-import { ZodForgeError } from "zod-forge"
+import { ZodForgeError } from "zod-mock-forge";
 
 try {
-  mock(schema, { overrides: { address: { age: -5 } } })
+  mock(schema, { overrides: { address: { age: -5 } } });
 } catch (e) {
   if (e instanceof ZodForgeError) {
-    console.log(e.code)    // "INVALID_OVERRIDE"
-    console.log(e.message) // 'Override at "address.age" failed: ...'
+    console.log(e.code); // "INVALID_OVERRIDE"
+    console.log(e.message); // 'Override at "address.age" failed: ...'
   }
 }
 ```
 
 `UNSUPPORTED_SCHEMA` is thrown for `z.never()`, `z.refine()`, `z.preprocess()` (with non-primitive output), `z.pipe()` (v3), `z.promise()`, `z.symbol()`, `z.custom()`, and overrides on transform schemas.
 
-`UNSUPPORTED_MODE` is thrown when `mode` is `"edge"` or `"random"` — both are coming in v2.
+`UNSUPPORTED_MODE` is thrown when `mode` is `"random"` — coming in v2.
 
 `INVALID_OVERRIDE` is thrown when an override produces a value that fails schema validation. The message includes the failing path and a description of the violation.
 
@@ -334,8 +441,8 @@ try {
 Pass a `seed` to get deterministic output:
 
 ```typescript
-const a = mock(UserSchema, { seed: 42 })
-const b = mock(UserSchema, { seed: 42 })
+const a = mock(UserSchema, { seed: 42 });
+const b = mock(UserSchema, { seed: 42 });
 // a deep-equals b
 ```
 
@@ -347,16 +454,10 @@ Without a seed, each call uses a fresh random state. Determinism is guaranteed w
 
 faker is great for generating realistic-looking data but it knows nothing about your schema. A `faker.number.int()` call doesn't know about `.positive()`. `faker.internet.email()` doesn't know about `.max(10)`. Keeping faker-based fixtures valid under schema changes is a constant maintenance burden — and failures are silent until a test runs.
 
-zod-forge derives the data from the schema itself, so constraints are always satisfied by construction. When the schema changes, the fixtures automatically adapt.
+zod-mock-forge derives the data from the schema itself, so constraints are always satisfied by construction. When the schema changes, the fixtures automatically adapt.
 
 ---
 
 ## Roadmap
 
-Two modes are planned for v2. Edge case mode (`mode: "edge"`) will generate boundary values: empty strings, maximum lengths, `0`, `-1`, `MAX_SAFE_INTEGER`, `null`-heavy object trees, and pathological unicode. Random mode (`mode: "random"`) will disable semantic inference entirely and generate maximally varied output within type constraints. Both are currently behind `UNSUPPORTED_MODE` with a clear message pointing to v2.
-
----
-
-## License
-
-MIT
+Random mode (`mode: "random"`) is planned for v2. It will disable semantic inference entirely and produce structurally-valid but content-random values — useful for fuzz-style testing where predictable field names shouldn't influence output.

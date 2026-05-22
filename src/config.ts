@@ -19,6 +19,20 @@ export interface MockOptions {
   maxDepth?: number;
   mode?: GenerationMode;
   useDefaults?: boolean;
+  /**
+   * Path-based generators. Keys are dot-separated paths (e.g. "user.address.zip").
+   * When the generation path matches a key, the provided function is called
+   * instead of the normal generator.
+   *
+   * @example
+   * mock(schema, {
+   *   generators: {
+   *     "user.address.zip": () => "90210",
+   *     "items.*.sku": () => `SKU-${Math.random().toString(36).slice(2, 8).toUpperCase()}`,
+   *   }
+   * })
+   */
+  generators?: Record<string, () => unknown>;
 }
 
 const DEFAULT_CONFIG: GlobalConfig = {

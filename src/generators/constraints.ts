@@ -370,6 +370,100 @@ function findMatchingParen(src: string, openPos: number): number {
   return -1;
 }
 
+// ---------------------------------------------------------------------------
+// Edge-mode generators
+// ---------------------------------------------------------------------------
+
+/**
+ * Generates a boundary string value.
+ * Format constraints take priority (shortest valid canonical form).
+ * Plain strings use "" (or min-length) vs max-length, picked randomly.
+ */
+export function generateEdgeString(c: StringConstraints, rng: SeededRNG): string {
+  // Format constraints — return the shortest/simplest valid canonical value
+  if (c.uuid) return "00000000-0000-4000-8000-000000000000";
+  if (c.email) return "a@b.co";
+  if (c.url) return "http://a.co";
+  if (c.datetime) return "1970-01-01T00:00:00.000Z";
+  if (c.dateOnly) return "1970-01-01";
+  if (c.timeOnly) return "00:00:00";
+  if (c.duration) return "P0Y0M0DT0H0M0S";
+  if (c.cuid) return "c" + "a".repeat(24);
+  if (c.cuid2) return "a".repeat(24);
+  if (c.ulid) return "00000000000000000000000000";
+  if (c.nanoid) return "a".repeat(21);
+  if (c.jwt) return "eyJhbGciOiJIUzI1NiJ9.e30.SflKxwRJSMeKKF2QT4fwpMeJf36POk6yJV_adQssw5c";
+  if (c.ipv4 || c.ip) return "0.0.0.0";
+  if (c.ipv6) return "0000:0000:0000:0000:0000:0000:0000:0000";
+  if (c.cidr) return "0.0.0.0/0";
+  if (c.cidrv6) return "0000::/0";
+  if (c.base64) return btoa("a");
+  if (c.base64url) return "YQ";
+  if (c.emoji) return "😀";
+
+  // startsWith/endsWith anchor — use the anchor itself as the value
+  if (c.startsWith && !c.endsWith) {
+    const minLen = Math.max(c.startsWith.length, c.min ?? 0);
+    return c.startsWith + "a".repeat(Math.max(0, minLen - c.startsWith.length));
+  }
+  if (c.endsWith && !c.startsWith) {
+    const minLen = Math.max(c.endsWith.length, c.min ?? 0);
+    return "a".repeat(Math.max(0, minLen - c.endsWith.length)) + c.endsWith;
+  }
+
+  // Pick between shortest valid and longest valid
+  const lo = c.min ?? 0;
+  // Only pick the high boundary if there's an explicit max
+  const len = c.max !== undefined ? (rng.bool() ? lo : c.max) : lo;
+  return "a".repeat(len);
+}
+
+/**
+ * Generates a boundary number value.
+ * Picks from [min, max, 0, -1, 1, MAX_SAFE_INTEGER] filtering to values
+ * that satisfy all active constraints. Falls back to 0 if nothing fits.
+ */
+export function generateEdgeNumber(c: NumberConstraints): number {
+  const lo = resolveNumberMin(c);
+  const hi = resolveNumberMax(c);
+
+  const candidates = [lo, hi, 0, -1, 1, Number.MAX_SAFE_INTEGER, Number.MIN_SAFE_INTEGER]
+    .filter(v => {
+      if (v < lo || v > hi) return false;
+      if (c.gt !== undefined && v <= c.gt) return false;
+      if (c.lt !== undefined && v >= c.lt) return false;
+      if (c.int && !Number.isInteger(v)) return false;
+      if (c.multipleOf !== undefined && v % c.multipleOf !== 0) return false;
+      return true;
+    });
+
+  if (candidates.length === 0) return lo;
+  // Alternate between low and high boundary for variety
+  return candidates[0]!;
+}
+
+/**
+ * Generates a boundary bigint value.
+ */
+export function generateEdgeBigInt(c: BigIntConstraints): bigint {
+  if (c.gte !== undefined) return c.gte;
+  if (c.gt !== undefined) return c.gt + 1n;
+  if (c.min !== undefined) return c.min;
+  if (c.positive) return 1n;
+  if (c.nonnegative) return 0n;
+  if (c.negative) return -1n;
+  return 0n;
+}
+
+/**
+ * Generates a boundary date value (epoch or min/max date).
+ */
+export function generateEdgeDate(c: DateConstraints): Date {
+  if (c.min) return new Date(c.min);
+  if (c.max) return new Date(c.max);
+  return new Date(0); // Unix epoch — the canonical edge date
+}
+
 export function generateString(
   c: StringConstraints,
   rng: SeededRNG,

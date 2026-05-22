@@ -11,6 +11,10 @@ import {
   generateNumber,
   generateBigInt,
   generateDate,
+  generateEdgeString,
+  generateEdgeNumber,
+  generateEdgeBigInt,
+  generateEdgeDate,
   type StringConstraints,
   type NumberConstraints,
   type BigIntConstraints,
@@ -22,6 +26,7 @@ import {
   isV4,
   rawDef,
   typeName,
+  getDescription,
   getChecks,
   getInnerType,
   getShape,
@@ -65,6 +70,13 @@ function dispatch(
   config: GlobalConfig,
   leaf: string | null,
 ): unknown {
+  // Path-based generator override — checked before anything else
+  if (Object.keys(ctx.generators).length > 0) {
+    const pathKey = ctx.path.join(".");
+    const gen = ctx.generators[pathKey];
+    if (gen !== undefined) return gen();
+  }
+
   // v4: check for embedded refinement checks (z.refine() becomes a custom check)
   if (hasRefinementChecks(schema)) {
     throw new ZodForgeError(
@@ -87,7 +99,8 @@ function dispatch(
       return dispatchBigInt(schema, ctx, config);
 
     case "boolean":
-      return ctx.rng.bool();
+      // Edge mode: false is the boundary value (0-like, truthy guard failures)
+      return ctx.mode === "edge" ? false : ctx.rng.bool();
 
     case "date":
       return dispatchDate(schema, ctx, config);
@@ -278,20 +291,47 @@ function dispatchString(
   config: GlobalConfig,
   leaf: string | null,
 ): string {
-  // Check custom matchers first
-  const custom = applyCustomMatchers(leaf, config.matchers);
+  // Description takes priority over leaf name for semantic inference
+  const description = getDescription(schema);
+  const semanticHint = description ?? leaf;
+
+  // Check custom matchers first (against description or leaf)
+  const custom = applyCustomMatchers(semanticHint, config.matchers);
   if (custom !== undefined) return String(custom);
 
   const c: StringConstraints = {};
 
   if (isV4(schema)) {
-    // v4: some schemas (z.ipv4(), z.ipv6(), z.cidrv4(), z.cidrv6()) carry their
-    // format on def.format rather than in checks — handle them first.
-    const topFormat = rawDef(schema).format as string | undefined;
-    if (topFormat === "ipv4") c.ipv4 = true;
-    else if (topFormat === "ipv6") c.ipv6 = true;
-    else if (topFormat === "cidrv4") c.cidr = true;
-    else if (topFormat === "cidrv6") c.cidrv6 = true;
+    // v4 / v4-mini: some schemas carry their format on def.format rather than
+    // in a checks array (e.g. z.email(), z.ipv4(), z.uuid() in v4-mini; z.ipv4()
+    // etc. in regular v4). Map def.format to the appropriate constraint flag.
+    const def = rawDef(schema);
+    const topFormat = def.format as string | undefined;
+    const topCheck = def.check as string | undefined;
+    if (topFormat && (topCheck === "string_format" || !getChecks(schema).length)) {
+      switch (topFormat) {
+        case "email": c.email = true; break;
+        case "url": c.url = true; break;
+        case "uuid": case "guid": c.uuid = true; break;
+        case "cuid": c.cuid = true; break;
+        case "cuid2": c.cuid2 = true; break;
+        case "ulid": c.ulid = true; break;
+        case "nanoid": c.nanoid = true; break;
+        case "jwt": c.jwt = true; break;
+        case "datetime": c.datetime = true; break;
+        case "date": c.dateOnly = true; break;
+        case "time": c.timeOnly = true; break;
+        case "duration": c.duration = true; break;
+        case "ip": c.ip = true; break;
+        case "ipv4": c.ipv4 = true; break;
+        case "ipv6": c.ipv6 = true; break;
+        case "cidrv4": c.cidr = true; break;
+        case "cidrv6": c.cidrv6 = true; break;
+        case "emoji": c.emoji = true; break;
+        case "base64": c.base64 = true; break;
+        case "base64url": c.base64url = true; break;
+      }
+    }
 
     // v4: checks are sub-schemas with ._zod.def
     const rawChecks = getChecks(schema);
@@ -374,7 +414,8 @@ function dispatchString(
     }
   }
 
-  return generateString(c, ctx.rng, ctx.path, leaf);
+  if (ctx.mode === "edge") return generateEdgeString(c, ctx.rng);
+  return generateString(c, ctx.rng, ctx.path, semanticHint);
 }
 
 function dispatchNumber(
@@ -383,12 +424,25 @@ function dispatchNumber(
   config: GlobalConfig,
   leaf: string | null,
 ): number {
-  const custom = applyCustomMatchers(leaf, config.matchers);
+  const semanticHint = getDescription(schema) ?? leaf;
+  const custom = applyCustomMatchers(semanticHint, config.matchers);
   if (custom !== undefined) return Number(custom);
 
   const c: NumberConstraints = {};
 
   if (isV4(schema)) {
+    // v4-mini: z.int(), z.float32(), etc. store their format at the top level
+    // of def rather than in a checks array.
+    const topDef = rawDef(schema);
+    if (topDef.check === "number_format") {
+      const fmt = topDef.format as string | undefined;
+      if (fmt === "safeint" || fmt === "int" || fmt === "int32" || fmt === "int64" ||
+          fmt === "uint32" || fmt === "uint64") {
+        c.int = true;
+      }
+      // float32/float64 are just ordinary floats — no special constraint needed
+    }
+
     const rawChecks = getChecks(schema);
     const checks = normalizeV4Checks(rawChecks);
 
@@ -450,7 +504,8 @@ function dispatchNumber(
     }
   }
 
-  return generateNumber(c, ctx.rng, ctx.path, leaf);
+  if (ctx.mode === "edge") return generateEdgeNumber(c);
+  return generateNumber(c, ctx.rng, ctx.path, semanticHint);
 }
 
 function dispatchBigInt(
@@ -493,6 +548,7 @@ function dispatchBigInt(
     }
   }
 
+  if (ctx.mode === "edge") return generateEdgeBigInt(c);
   return generateBigInt(c, ctx.rng, ctx.path);
 }
 
@@ -530,6 +586,7 @@ function dispatchDate(
     }
   }
 
+  if (ctx.mode === "edge") return generateEdgeDate(c);
   return generateDate(c, ctx.rng, ctx.path);
 }
 
@@ -552,6 +609,8 @@ function dispatchOptional(
   config: GlobalConfig,
   leaf: string | null,
 ): unknown {
+  // Edge mode: always produce undefined (the boundary case)
+  if (ctx.mode === "edge") return undefined;
   // Decide BEFORE generating inner value
   if (!ctx.rng.bool(0.7)) return undefined;
   const inner = getInnerType(schema);
@@ -564,6 +623,8 @@ function dispatchNullable(
   config: GlobalConfig,
   leaf: string | null,
 ): unknown {
+  // Edge mode: always produce null (the boundary case)
+  if (ctx.mode === "edge") return null;
   // Decide BEFORE generating inner value
   if (!ctx.rng.bool(0.8)) return null;
   const inner = getInnerType(schema);
@@ -601,7 +662,9 @@ function dispatchArray(
     );
   }
 
-  const len = exactLen !== undefined ? exactLen : ctx.rng.nextInt(minLen, maxLen);
+  // Edge mode: use 0 (empty) if no explicit min, otherwise the min
+  const edgeLen = min !== undefined ? minLen : 0;
+  const len = exactLen !== undefined ? exactLen : ctx.mode === "edge" ? edgeLen : ctx.rng.nextInt(minLen, maxLen);
   const itemCtx = arrayItemCtx(ctx);
   const element = getArrayElement(schema);
 

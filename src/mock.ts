@@ -24,10 +24,10 @@ export function mock<S extends z.ZodTypeAny>(
 
   const mode = options?.mode ?? "realistic";
 
-  if (mode !== "realistic") {
+  if (mode === "random") {
     throw new ZodForgeError(
-      `Generation mode "${mode}" is not supported in v1. ` +
-        `Only "realistic" is implemented. "${mode}" is coming in v2.`,
+      `Generation mode "random" is not supported in v1. ` +
+        `Only "realistic" and "edge" are implemented. "random" is coming in v2.`,
       "UNSUPPORTED_MODE",
     );
   }
@@ -44,6 +44,7 @@ export function mock<S extends z.ZodTypeAny>(
     rng,
     mode,
     useDefaults: options?.useDefaults ?? config.useDefaults,
+    generators: options?.generators ?? {},
   };
 
   return runPipeline(schema, ctx, config, options);
