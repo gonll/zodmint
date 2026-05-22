@@ -97,14 +97,10 @@ describe("mock()", () => {
     expect(result === undefined || typeof result === "object").toBe(true);
   });
 
-  it("mode: 'edge' throws UNSUPPORTED_MODE", () => {
-    expect(() => mock(z.string(), { mode: "edge" })).toThrow(ZodForgeError);
-    try {
-      mock(z.string(), { mode: "edge" });
-    } catch (e) {
-      expect((e as ZodForgeError).code).toBe("UNSUPPORTED_MODE");
-      expect((e as ZodForgeError).message).toMatch(/v2/i);
-    }
+  it("mode: 'edge' produces a valid result", () => {
+    const schema = z.string();
+    const result = mock(schema, { mode: "edge" });
+    expect(schema.safeParse(result).success).toBe(true);
   });
 
   it("mode: 'random' throws UNSUPPORTED_MODE", () => {
