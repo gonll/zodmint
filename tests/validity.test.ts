@@ -208,6 +208,34 @@ describe("validity contract — z.refine() and z.superRefine()", () => {
   });
 });
 
+describe("z.object().catchall()", () => {
+  it("generates valid object with catchall number values", () => {
+    const schema = z.object({ name: z.string() }).catchall(z.number());
+    const result = mock(schema);
+    expect(schema.safeParse(result).success).toBe(true);
+    expect(typeof result.name).toBe("string");
+    // Extra keys should all be numbers
+    Object.entries(result).forEach(([k, v]) => {
+      if (k !== "name") expect(typeof v).toBe("number");
+    });
+  });
+
+  it("catchall with edge mode generates no extra keys", () => {
+    const schema = z.object({ id: z.string() }).catchall(z.boolean());
+    const result = mock(schema, { mode: "edge" });
+    expect(schema.safeParse(result).success).toBe(true);
+    expect(Object.keys(result)).toEqual(["id"]);
+  });
+
+  it("catchall with complex value schema", () => {
+    const schema = z.object({ type: z.literal("widget") }).catchall(
+      z.object({ value: z.number() })
+    );
+    const result = mock(schema);
+    expect(schema.safeParse(result).success).toBe(true);
+  });
+});
+
 describe("validity contract — z.promise()", () => {
   it("z.promise() generates a Promise", async () => {
     const schema = z.promise(z.string().email());

@@ -13,6 +13,7 @@ export interface GlobalConfig {
   maxDepth: number;
   useDefaults: boolean;
   matchers: FieldMatcher[];
+  refinementRetries: number;
 }
 
 export interface MockOptions<S extends z.ZodTypeAny = z.ZodTypeAny> {
@@ -35,12 +36,19 @@ export interface MockOptions<S extends z.ZodTypeAny = z.ZodTypeAny> {
    * })
    */
   generators?: Record<string, () => unknown>;
+  /**
+   * Maximum number of attempts when generating a value for a refined schema
+   * (z.refine / z.superRefine). Overrides the global config value for this call.
+   * Defaults to globalConfig.refinementRetries (default: 10).
+   */
+  refinementRetries?: number;
 }
 
 const DEFAULT_CONFIG: GlobalConfig = {
   maxDepth: 2,
   useDefaults: false,
   matchers: [],
+  refinementRetries: 10,
 };
 
 let globalConfig: GlobalConfig = { ...DEFAULT_CONFIG, matchers: [] };
@@ -51,6 +59,7 @@ export function snapshotConfig(): Readonly<GlobalConfig> {
     maxDepth: globalConfig.maxDepth,
     useDefaults: globalConfig.useDefaults,
     matchers: [...globalConfig.matchers.map(m => ({ ...m }))],
+    refinementRetries: globalConfig.refinementRetries,
   };
 }
 

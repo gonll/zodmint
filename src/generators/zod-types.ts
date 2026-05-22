@@ -704,6 +704,23 @@ function dispatchObject(
     result[key] = dispatch(fieldSchema as z.ZodTypeAny, fieldCtx, config, key);
   }
 
+  // catchall support: if the schema has a catchall that isn't ZodNever,
+  // generate 1–3 extra key-value pairs whose values conform to the catchall schema.
+  const catchallDef = rawDef(schema).catchall as z.ZodTypeAny | undefined;
+  if (catchallDef) {
+    const catchallTypeName = typeName(catchallDef);
+    const hasCatchall = catchallTypeName !== "never" && catchallTypeName !== "ZodNever";
+    if (hasCatchall) {
+      // Edge mode: generate 0 extra keys (minimal valid object)
+      const extraCount = ctx.mode === "edge" ? 0 : ctx.rng.nextInt(1, 3);
+      for (let i = 0; i < extraCount; i++) {
+        const key = `extra${i}_${ctx.rng.nextInt(100, 999)}`;
+        const valCtx = { ...ctx, path: [...ctx.path, key] };
+        result[key] = dispatch(catchallDef, valCtx, config, key);
+      }
+    }
+  }
+
   return result;
 }
 
@@ -990,15 +1007,13 @@ function dispatchLazy(
 // Refinement dispatcher (generate-and-test strategy)
 // ---------------------------------------------------------------------------
 
-const REFINEMENT_MAX_ATTEMPTS = 10;
-
 /**
  * Generates a value for a schema containing refinements by repeatedly
  * generating candidates from the base schema (without refinements) and
  * checking whether they satisfy the full refined schema via safeParse.
  *
  * @param schema  - The full refined schema (used for safeParse validation)
- * @param ctx     - Current generation context
+ * @param ctx     - Current generation context (ctx.refinementRetries controls max attempts)
  * @param config  - Global config
  * @param leaf    - Leaf key hint for semantic generation
  * @param isV4Schema - If true, use stripRefinementChecks to get base schema;
@@ -1012,8 +1027,9 @@ function dispatchRefinement(
   isV4Schema: boolean,
 ): unknown {
   const baseSchema = isV4Schema ? stripRefinementChecks(schema) : getRefinementInner(schema);
+  const maxAttempts = ctx.refinementRetries;
 
-  for (let attempt = 0; attempt < REFINEMENT_MAX_ATTEMPTS; attempt++) {
+  for (let attempt = 0; attempt < maxAttempts; attempt++) {
     // Derive a new seed from the current RNG so each attempt gets a distinct candidate
     const attemptSeed = ctx.rng.nextInt(0, 2 ** 31);
     const attemptCtx: GenerationContext = {
@@ -1027,7 +1043,7 @@ function dispatchRefinement(
   }
 
   throw new ZodForgeError(
-    `Could not satisfy refinement at ${formatPath(ctx.path)} after ${REFINEMENT_MAX_ATTEMPTS} attempts. ` +
+    `Could not satisfy refinement at ${formatPath(ctx.path)} after ${maxAttempts} attempts. ` +
       `Consider using a path-based generator to provide a valid value directly.`,
     "GENERATION_FAILED",
   );

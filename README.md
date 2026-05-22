@@ -85,6 +85,8 @@ Options:
 
 `mode` accepts `"realistic"` (default), `"edge"`, or `"random"`. See [Edge Mode](#edge-mode) and [Random Mode](#random-mode) for details.
 
+`refinementRetries` sets how many times the generator will retry a failing `z.refine()` or `z.superRefine()` before throwing `GENERATION_FAILED`. Defaults to `10`. Override globally via `configure({ refinementRetries: N })` or per-call.
+
 One thing worth understanding: `mock()` captures an immutable snapshot of the global config the moment it's called. Calling `configure()` partway through a generation run (say, inside a custom matcher) has no effect on the current call. This makes concurrent usage safe and test isolation predictable.
 
 ---
@@ -164,6 +166,25 @@ import { resetConfig } from "zod-mock-forge";
 
 afterEach(() => resetConfig());
 ```
+
+---
+
+### `zodForgeMatchers` (testing utilities)
+
+Import from `"zod-mock-forge/testing"` to get a `toMatchSchema` custom matcher for vitest/jest:
+
+```typescript
+// vitest.setup.ts (or jest.setup.ts)
+import { zodForgeMatchers } from "zod-mock-forge/testing";
+import { expect } from "vitest";
+expect.extend(zodForgeMatchers);
+
+// in your tests:
+expect(mock(UserSchema)).toMatchSchema(UserSchema);
+expect({ name: "Alice", age: 30 }).toMatchSchema(UserSchema);
+```
+
+On failure, the error message lists each schema violation with its path.
 
 ---
 
@@ -265,6 +286,34 @@ configure({
 
 ---
 
+## Refinements
+
+`z.refine()` and `z.superRefine()` are supported via a generate-and-test strategy. zod-mock-forge generates a candidate from the base schema, evaluates the refinement, and retries with a different seed if it fails — up to `refinementRetries` attempts (default: 10).
+
+```typescript
+const schema = z.object({
+  password: z.string().min(8).refine(v => /[A-Z]/.test(v), "needs uppercase"),
+  age: z.number().int().refine(v => v >= 18, "must be adult"),
+});
+
+const result = mock(schema);
+// password satisfies both min(8) and the uppercase refinement
+// age is an integer >= 18
+```
+
+If the refinement is unsatisfiable (always returns false) or extremely selective, increase the retry limit:
+
+```typescript
+const schema = z.number().int().min(1).max(100)
+  .refine(v => v % 10 === 0, "must be multiple of 10");
+
+const result = mock(schema, { refinementRetries: 50 });
+```
+
+If all retries are exhausted, `ZodForgeError [GENERATION_FAILED]` is thrown with a message suggesting a path-based generator as an escape hatch.
+
+---
+
 ## Schema Descriptions as Semantic Hints
 
 `z.describe()` lets you attach a semantic hint directly to a schema. zod-mock-forge reads it and uses it as a generation hint, taking priority over the field name:
@@ -308,6 +357,25 @@ The boundary rules:
 Strings produce the minimum-length value (all `"a"`s), or the canonical shortest form for format constraints (`"a@b.co"` for email, `"http://a.co"` for url, `"00000000-0000-4000-8000-000000000000"` for uuid). Numbers produce the minimum value when constrained, `0` otherwise. Booleans produce `false`. Optionals produce `undefined`. Nullables produce `null`. Arrays produce `[]` when unconstrained, or exactly `min` items when `.min()` is set. Dates produce epoch (`new Date(0)`). BigInts produce `0n`.
 
 Edge mode composes with all other options — seeds, overrides, and path-based generators all still apply.
+
+---
+
+## Random Mode
+
+Pass `mode: "random"` to disable all semantic inference. Field names and `z.describe()` hints are ignored — only hard schema constraints (`.email()`, `.uuid()`, `.min()`, etc.) influence the output. Useful for fuzz-style testing where predictable field patterns would undermine the test.
+
+```typescript
+const schema = z.object({
+  email: z.string(),   // no .email() constraint — gets a random string, not an email
+  id: z.string().uuid(), // .uuid() is structural — still generates a UUID
+  count: z.number().int().min(0),
+});
+
+const result = mock(schema, { mode: "random" });
+// result.email → some random string (not email-shaped)
+// result.id    → valid UUID (format constraint respected)
+// result.count → valid non-negative integer
+```
 
 ---
 
@@ -395,7 +463,7 @@ zod-mock-forge handles the full Zod type system with a few noted exceptions.
 
 `z.unknown()` and `z.any()` produce a random primitive (string, number, or boolean). `z.nan()` returns `NaN` — see the warning below. `z.void()` returns `undefined`.
 
-`z.string().transform(...)` is supported; the transform runs once via `safeParse`. `z.promise(T)` is supported — it generates `Promise.resolve(value)` where `value` is generated from the inner schema `T`. `z.preprocess()` with a non-primitive output, `z.pipe()` (v3), `z.symbol()`, `z.never()`, and `z.custom()` throw `UNSUPPORTED_SCHEMA`.
+`z.string().transform(...)` is supported; the transform runs once via `safeParse`. `z.promise(T)` is supported — it generates `Promise.resolve(value)` where `value` is generated from the inner schema `T`. `z.object({}).catchall(T)` generates all declared fields plus 1–3 additional key-value pairs whose values conform to `T`. `z.refine()` and `z.superRefine()` are supported via generate-and-test, retrying up to `refinementRetries` times (default: 10) before throwing `GENERATION_FAILED`. `z.preprocess()` with a non-primitive output, `z.pipe()` (v3), `z.symbol()`, `z.never()`, and `z.custom()` throw `UNSUPPORTED_SCHEMA`.
 
 ---
 
@@ -432,7 +500,7 @@ try {
 
 `MAX_DEPTH_EXCEEDED` is thrown when a required recursive object hits `maxDepth`. The message includes the path and the configured depth.
 
-`GENERATION_FAILED` is thrown when all union branches fail, an intersection conflict can't be resolved, or constraints are mathematically unsatisfiable.
+`GENERATION_FAILED` is thrown when all union branches fail, an intersection conflict can't be resolved, constraints are mathematically unsatisfiable, or a refinement is not satisfied after exhausting all retries.
 
 ---
 
@@ -474,7 +542,15 @@ zod-mock-forge derives the data from the schema itself, so constraints are alway
 
 ## Roadmap
 
-Random mode (`mode: "random"`) is now implemented. It disables semantic inference entirely and produces structurally-valid but content-random values — useful for fuzz-style testing where predictable field names shouldn't influence output. Hard format constraints (`.email()`, `.uuid()`, etc.) are still respected as they are structural requirements, not semantic hints.
+The immediate v1 backlog is focused on a few remaining gaps:
+
+**Transforms on overrides** — Overrides on schemas containing `.transform()` are not yet supported. This requires tracking the pre-transform domain, which is deferred to v2.
+
+**Async refinements** — `z.superRefine()` returning a `Promise` is not yet supported. Synchronous refinements work today; async variants throw `UNSUPPORTED_SCHEMA`.
+
+**`z.custom()` and `z.refine()` on complex output types** — The generate-and-test strategy works well for most cases but has no way to introspect what a custom predicate actually requires. A path-based generator is the recommended escape hatch for highly selective predicates.
+
+**`z.preprocess()` with non-primitive output** — Handled when the output is a primitive (treated like `z.coerce.*`), but arbitrary preprocess transforms with object or array outputs remain unsupported.
 
 ---
 

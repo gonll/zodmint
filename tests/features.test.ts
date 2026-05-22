@@ -385,3 +385,24 @@ describe('mode: "edge" — additional types', () => {
     expect(schema.safeParse(result).success).toBe(true);
   });
 });
+
+// ---------------------------------------------------------------------------
+// refinementRetries option
+// ---------------------------------------------------------------------------
+
+describe("refinementRetries option", () => {
+  it("respects per-call refinementRetries", () => {
+    const schema = z.string().refine(() => false, "always fails");
+    expect(() => mock(schema, { refinementRetries: 3 })).toThrow(ZodForgeError);
+  });
+
+  it("higher retries increases chance of satisfying strict refinement", () => {
+    // Only 1-in-10 numbers pass — needs retries
+    const schema = z.number().int().min(1).max(100)
+      .refine(v => v % 10 === 0, "must be multiple of 10");
+    // With enough retries this should always pass
+    expect(() => mock(schema, { refinementRetries: 50, seed: 1 })).not.toThrow();
+    const result = mock(schema, { refinementRetries: 50, seed: 1 });
+    expect(result % 10).toBe(0);
+  });
+});

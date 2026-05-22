@@ -27,6 +27,8 @@ export interface GenerationContext {
   useDefaults: boolean;
   /** Path-based generator overrides, keyed by dot-joined path (e.g. "user.address.zip") */
   generators: Record<string, () => unknown>;
+  /** Maximum number of generate-and-test attempts for z.refine() / z.superRefine() schemas */
+  refinementRetries: number;
 }
 
 /** mulberry32 seeded PRNG */

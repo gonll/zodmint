@@ -36,6 +36,7 @@ export function mock<S extends z.ZodTypeAny>(
     mode,
     useDefaults: options?.useDefaults ?? config.useDefaults,
     generators: options?.generators ?? {},
+    refinementRetries: options?.refinementRetries ?? config.refinementRetries,
   };
 
   return runPipeline(schema, ctx, config, options);
