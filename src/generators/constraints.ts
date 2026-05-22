@@ -1,6 +1,9 @@
 import { ZodForgeError, formatPath } from "../errors.js";
 import type { GenerationContext, SeededRNG } from "../context.js";
 
+/** Fixed deterministic anchor date for seeded generation (2024-01-01T00:00:00.000Z) */
+const ANCHOR_MS = 1704067200000;
+
 // ---------------------------------------------------------------------------
 // String constraints
 // ---------------------------------------------------------------------------
@@ -96,9 +99,9 @@ function uuidV4(rng: SeededRNG): string {
 }
 
 function generateEmail(rng: SeededRNG): string {
-  const users = ["alice", "bob", "carol", "dave", "eve", "frank", "grace", "henry"];
-  const domains = ["example.com", "test.org", "mock.io", "fixture.dev", "forge.net"];
-  return `${rng.pick(users)}${rng.nextInt(1, 99)}@${rng.pick(domains)}`;
+  const user = rng.pick(FIRST_NAMES).toLowerCase();
+  const domains = ["example.com", "test.org", "mock.io", "fixture.dev", "forge.net", "demo.co", "sample.net"];
+  return `${user}${rng.nextInt(1, 99)}@${rng.pick(domains)}`;
 }
 
 function generateUrl(rng: SeededRNG): string {
@@ -401,12 +404,18 @@ export function generateEdgeString(c: StringConstraints, rng: SeededRNG): string
   if (c.base64url) return "YQ";
   if (c.emoji) return "😀";
 
-  // startsWith/endsWith anchor — use the anchor itself as the value
-  if (c.startsWith && !c.endsWith) {
+  // startsWith/endsWith anchor — handle combined case first
+  if (c.startsWith && c.endsWith) {
+    const fixed = c.startsWith + c.endsWith;
+    const minLen = Math.max(fixed.length, c.min ?? 0);
+    const padding = Math.max(0, minLen - fixed.length);
+    return c.startsWith + "a".repeat(padding) + c.endsWith;
+  }
+  if (c.startsWith) {
     const minLen = Math.max(c.startsWith.length, c.min ?? 0);
     return c.startsWith + "a".repeat(Math.max(0, minLen - c.startsWith.length));
   }
-  if (c.endsWith && !c.startsWith) {
+  if (c.endsWith) {
     const minLen = Math.max(c.endsWith.length, c.min ?? 0);
     return "a".repeat(Math.max(0, minLen - c.endsWith.length)) + c.endsWith;
   }
@@ -486,9 +495,9 @@ export function generateString(
   if (c.uuid) return uuidV4(rng);
   if (c.email) return generateEmail(rng);
   if (c.url) return generateUrl(rng);
-  if (c.datetime) return new Date(Date.now() - rng.nextInt(0, 365 * 24 * 3600 * 1000)).toISOString();
+  if (c.datetime) return new Date(ANCHOR_MS - rng.nextInt(0, 365 * 24 * 3600 * 1000)).toISOString();
   if (c.dateOnly) {
-    const d = new Date(Date.now() - rng.nextInt(0, 5 * 365 * 24 * 3600 * 1000));
+    const d = new Date(ANCHOR_MS - rng.nextInt(0, 5 * 365 * 24 * 3600 * 1000));
     return d.toISOString().split("T")[0]!;
   }
   if (c.timeOnly) {
@@ -518,7 +527,7 @@ export function generateString(
     // Structurally valid JWT (header.payload.signature in base64url)
     const b64url = (s: string) => btoa(s).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
     const header = b64url(JSON.stringify({ alg: "HS256", typ: "JWT" }));
-    const payload = b64url(JSON.stringify({ sub: uuidV4(rng), iat: Math.floor(Date.now() / 1000) }));
+    const payload = b64url(JSON.stringify({ sub: uuidV4(rng), iat: Math.floor(ANCHOR_MS / 1000) }));
     const sig = randomString(rng, 43, CHARS_ALNUM + "_-");
     return `${header}.${payload}.${sig}`;
   }
@@ -621,13 +630,13 @@ function applyStringSemantic(key: string, rng: SeededRNG): string | null {
   if (/zipcode|zip\b|postalcode|postal_code/.test(k)) return `${rng.nextInt(10000, 99999)}`;
 
   // Company / organization
-  if (/\bcompany\b|organization|organisation|employer/.test(k)) return `${rng.pick(COMPANY_PREFIXES)} ${rng.pick(COMPANY_SUFFIXES)}`;
+  if (/\bcompany\b|organization|organisation|employer/.test(k)) return rng.pick(COMPANIES);
   if (/department|team\b/.test(k)) return rng.pick(DEPARTMENTS);
   if (/jobtitle|job_title|role\b|position\b/.test(k)) return rng.pick(JOB_TITLES);
 
   // Content
-  if (/description|bio\b|summary|about|overview/.test(k)) return rng.pick(LOREM_SENTENCES);
-  if (/\bcontent\b|body\b|message\b|note\b|notes\b|text\b/.test(k)) return rng.pick(LOREM_SENTENCES);
+  if (/description|bio\b|summary|about|overview/.test(k)) return rng.pick(DESCRIPTIONS);
+  if (/\bcontent\b|body\b|message\b|note\b|notes\b|text\b/.test(k)) return rng.pick(DESCRIPTIONS);
   if (/\btitle\b/.test(k)) return rng.pick(TITLES);
   if (/subject\b/.test(k)) return rng.pick(EMAIL_SUBJECTS);
   if (/\btag\b|tags\b|label\b|labels\b|category\b|categories\b/.test(k)) return rng.pick(TAGS);
@@ -668,7 +677,7 @@ function applyStringSemantic(key: string, rng: SeededRNG): string | null {
 
   // Dates (as strings, not Date objects)
   if (/\bdate\b|createdat|created_at|updatedat|updated_at|deletedat|deleted_at|publishedat|published_at/.test(k)) {
-    return new Date(Date.now() - rng.nextInt(0, 365 * 24 * 3600 * 1000)).toISOString().split("T")[0]!;
+    return new Date(ANCHOR_MS - rng.nextInt(0, 365 * 24 * 3600 * 1000)).toISOString().split("T")[0]!;
   }
   if (/birthdate|birth_date|dob\b|dateofbirth|date_of_birth/.test(k)) {
     const year = rng.nextInt(1960, 2000);
@@ -812,22 +821,45 @@ function applyNumericSemantic(
   const k = key.toLowerCase();
   const isInt = c.int ?? false;
 
-  // Only clamp against explicit user-set constraints, not the synthetic defaults.
+  // Only intersect against explicit user-set constraints, not the synthetic defaults.
   const hasExplicit =
     c.min !== undefined || c.max !== undefined ||
     c.gte !== undefined || c.lte !== undefined ||
     c.gt !== undefined || c.lt !== undefined ||
     c.positive || c.negative || c.nonnegative || c.nonpositive;
 
-  const clamp = (v: number) => {
-    if (!hasExplicit) return v;
-    const lo = resolveNumberMin(c);
-    const hi = resolveNumberMax(c);
-    return Math.min(Math.max(v, lo), hi);
+  const constraintLo = hasExplicit ? resolveNumberMin(c) : -Infinity;
+  const constraintHi = hasExplicit ? resolveNumberMax(c) : Infinity;
+
+  /**
+   * Generates a value within the intersection of [semMin, semMax] and the
+   * constraint range. Returns null if the ranges don't overlap so the caller
+   * can fall through to the generic generator.
+   */
+  const int = (semMin: number, semMax: number): number | null => {
+    if (!hasExplicit) return rng.nextInt(semMin, semMax);
+    // Check overlap
+    if (semMax < constraintLo || semMin > constraintHi) return null;
+    const effectiveMin = Math.ceil(Math.max(semMin, constraintLo));
+    const effectiveMax = Math.floor(Math.min(semMax, constraintHi));
+    if (effectiveMin > effectiveMax) return null;
+    return rng.nextInt(effectiveMin, effectiveMax);
   };
-  const int = (min: number, max: number) => clamp(rng.nextInt(min, max));
-  const float = (min: number, max: number, decimals = 2) =>
-    clamp(isInt ? rng.nextInt(Math.ceil(min), Math.floor(max)) : parseFloat(rng.nextFloat(min, max).toFixed(decimals)));
+  const float = (semMin: number, semMax: number, decimals = 2): number | null => {
+    if (!hasExplicit) {
+      return isInt
+        ? rng.nextInt(Math.ceil(semMin), Math.floor(semMax))
+        : parseFloat(rng.nextFloat(semMin, semMax).toFixed(decimals));
+    }
+    // Check overlap
+    if (semMax < constraintLo || semMin > constraintHi) return null;
+    const effectiveMin = Math.max(semMin, constraintLo);
+    const effectiveMax = Math.min(semMax, constraintHi);
+    if (effectiveMin > effectiveMax) return null;
+    return isInt
+      ? rng.nextInt(Math.ceil(effectiveMin), Math.floor(effectiveMax))
+      : parseFloat(rng.nextFloat(effectiveMin, effectiveMax).toFixed(decimals));
+  };
 
   // Human attributes
   if (/\bage\b/.test(k)) return int(18, 80);
@@ -966,8 +998,7 @@ export interface DateConstraints {
 }
 
 export function generateDate(c: DateConstraints, rng: SeededRNG, path: string[]): Date {
-  const now = Date.now();
-  const maxMs = c.max?.getTime() ?? now;
+  const maxMs = c.max?.getTime() ?? ANCHOR_MS;
   const minMs = c.min?.getTime() ?? (maxMs - 365 * 24 * 3600 * 1000);
 
   if (minMs > maxMs) {
@@ -985,85 +1016,242 @@ export function generateDate(c: DateConstraints, rng: SeededRNG, path: string[])
 // ---------------------------------------------------------------------------
 
 const FIRST_NAMES = [
+  // English
   "Alice", "Bob", "Carol", "Dave", "Eve", "Frank", "Grace", "Henry", "Iris", "Jack",
   "Karen", "Leo", "Maya", "Noah", "Olivia", "Paul", "Quinn", "Rachel", "Sam", "Tina",
-  "Uma", "Victor", "Wendy", "Xander", "Yara", "Zoe", "Aaron", "Beth", "Carlos", "Diana",
+  "Uma", "Victor", "Wendy", "Xander", "Yara", "Zoe", "Aaron", "Beth", "Diana", "Ethan",
+  "Fiona", "George", "Hannah", "Ian", "Julia", "Kevin", "Laura", "Mike", "Nora", "Oscar",
+  "Penny", "Ryan", "Sarah", "Tom", "Ursula", "Violet", "Will", "Ximena", "Yvonne", "Zach",
+  // Spanish / Latin American
+  "Carlos", "Maria", "Jose", "Ana", "Luis", "Carmen", "Miguel", "Sofia", "Jorge", "Lucia",
+  "Alejandro", "Valentina", "Diego", "Isabella", "Sebastian", "Camila", "Andres", "Gabriela",
+  // French
+  "Antoine", "Camille", "Julien", "Manon", "Nicolas", "Claire", "Pierre", "Margot",
+  // German
+  "Felix", "Lena", "Maximilian", "Sophie", "Johannes", "Anna", "Lukas", "Emma",
+  // Asian
+  "Wei", "Mei", "Yuki", "Kenji", "Priya", "Arjun", "Sana", "Haruto", "Aiko", "Riya",
+  "Jin", "Min", "Hana", "Takeshi", "Ananya", "Vikram", "Yuna", "Joon", "Sakura", "Ryo",
+  // African / Middle Eastern
+  "Amara", "Kofi", "Fatima", "Omar", "Aisha", "Ibrahim", "Zara", "Kwame", "Nadia", "Hassan",
 ];
 const LAST_NAMES = [
-  "Smith", "Johnson", "Williams", "Brown", "Jones", "Garcia", "Miller", "Davis", "Wilson", "Moore",
-  "Taylor", "Anderson", "Thomas", "Jackson", "White", "Harris", "Martin", "Thompson", "Young", "Hall",
-  "Lee", "Walker", "Allen", "King", "Wright", "Scott", "Torres", "Nguyen", "Hill", "Flores",
+  // Common English
+  "Smith", "Johnson", "Williams", "Brown", "Jones", "Miller", "Davis", "Wilson", "Moore", "Taylor",
+  "Anderson", "Thomas", "Jackson", "White", "Harris", "Martin", "Thompson", "Young", "Hall", "Walker",
+  "Allen", "King", "Wright", "Scott", "Hill", "Adams", "Baker", "Nelson", "Carter", "Mitchell",
+  "Roberts", "Turner", "Phillips", "Campbell", "Parker", "Evans", "Edwards", "Collins", "Stewart", "Morris",
+  // Hispanic
+  "Garcia", "Rodriguez", "Martinez", "Hernandez", "Lopez", "Gonzalez", "Perez", "Sanchez", "Torres", "Flores",
+  "Rivera", "Ramirez", "Cruz", "Reyes", "Morales", "Jimenez", "Ortiz", "Gutierrez", "Chavez", "Vargas",
+  // Asian
+  "Nguyen", "Lee", "Kim", "Chen", "Wang", "Liu", "Zhang", "Tanaka", "Suzuki", "Yamamoto",
+  "Park", "Patel", "Singh", "Kumar", "Sharma", "Gupta", "Nakamura", "Kobayashi", "Ito", "Watanabe",
+  // Other
+  "Müller", "Weber", "Fischer", "Dubois", "Leroy", "Moreau", "Andersson", "Lindgren", "Johansson",
+  "Cohen", "Levy", "Ahmed", "Hassan", "Ali", "Okafor", "Mensah", "Diallo", "Tremblay", "Bouchard",
 ];
 const STREET_NAMES = [
   "Oak", "Maple", "Pine", "Elm", "Cedar", "Main", "Park", "Lake", "Hill", "River",
   "Sunset", "Willow", "Highland", "Meadow", "Forest", "Spring", "Valley", "Ridge", "Birch", "Ash",
+  "Washington", "Lincoln", "Jefferson", "Madison", "Adams", "Jackson", "Franklin", "Grant", "Monroe", "Harrison",
+  "Orchard", "Cherry", "Walnut", "Chestnut", "Poplar", "Sycamore", "Magnolia", "Hawthorn", "Rosewood", "Laurel",
+  "Broad", "High", "Church", "School", "Mill", "Bridge", "Station", "Market", "Harbor", "Cliff",
 ];
-const STREET_TYPES = ["St", "Ave", "Blvd", "Dr", "Ln", "Rd", "Way", "Ct", "Pl", "Terrace"];
+const STREET_TYPES = ["St", "Ave", "Blvd", "Dr", "Ln", "Rd", "Way", "Ct", "Pl", "Terrace", "Circle", "Trail", "Path", "Loop", "Run"];
 const CITIES = [
-  "Springfield", "Shelbyville", "Riverdale", "Lakewood", "Hillcrest", "Maplewood", "Fairview",
-  "Brookside", "Greenville", "Ashford", "Westfield", "Eastport", "Northgate", "Southbury",
-  "Denver", "Portland", "Austin", "Nashville", "Charlotte", "Phoenix",
+  // USA
+  "New York", "Los Angeles", "Chicago", "Houston", "Phoenix", "Philadelphia", "San Antonio", "San Diego",
+  "Dallas", "San Jose", "Austin", "Jacksonville", "San Francisco", "Seattle", "Denver", "Nashville",
+  "Portland", "Las Vegas", "Memphis", "Louisville", "Baltimore", "Milwaukee", "Albuquerque", "Tucson",
+  // Canada
+  "Toronto", "Vancouver", "Montreal", "Calgary", "Ottawa", "Edmonton", "Winnipeg", "Quebec City",
+  // Europe
+  "London", "Paris", "Berlin", "Madrid", "Rome", "Amsterdam", "Brussels", "Vienna", "Zurich", "Stockholm",
+  "Oslo", "Copenhagen", "Helsinki", "Lisbon", "Athens", "Warsaw", "Prague", "Budapest", "Bucharest",
+  // Asia-Pacific
+  "Tokyo", "Beijing", "Shanghai", "Seoul", "Mumbai", "Delhi", "Singapore", "Sydney", "Melbourne", "Auckland",
+  "Osaka", "Taipei", "Hong Kong", "Bangkok", "Kuala Lumpur", "Jakarta", "Manila", "Karachi", "Dhaka",
+  // Americas / Other
+  "São Paulo", "Buenos Aires", "Bogotá", "Lima", "Santiago", "Mexico City", "Guadalajara",
+  "Cairo", "Lagos", "Nairobi", "Johannesburg", "Casablanca", "Dubai", "Tel Aviv", "Istanbul",
 ];
 const STATES = [
-  "California", "Texas", "Florida", "New York", "Pennsylvania", "Illinois", "Ohio",
-  "Georgia", "North Carolina", "Michigan", "Virginia", "Washington", "Colorado", "Arizona",
-  "Ontario", "British Columbia", "Quebec", "Bavaria", "Île-de-France",
+  // USA
+  "Alabama", "Alaska", "Arizona", "Arkansas", "California", "Colorado", "Connecticut", "Delaware",
+  "Florida", "Georgia", "Hawaii", "Idaho", "Illinois", "Indiana", "Iowa", "Kansas", "Kentucky",
+  "Louisiana", "Maine", "Maryland", "Massachusetts", "Michigan", "Minnesota", "Mississippi", "Missouri",
+  "Montana", "Nebraska", "Nevada", "New Hampshire", "New Jersey", "New Mexico", "New York",
+  "North Carolina", "North Dakota", "Ohio", "Oklahoma", "Oregon", "Pennsylvania", "Rhode Island",
+  "South Carolina", "South Dakota", "Tennessee", "Texas", "Utah", "Vermont", "Virginia",
+  "Washington", "West Virginia", "Wisconsin", "Wyoming",
+  // Canada
+  "Ontario", "Quebec", "British Columbia", "Alberta", "Manitoba", "Saskatchewan",
+  "Nova Scotia", "New Brunswick", "Newfoundland and Labrador",
+  // Europe / Other
+  "Bavaria", "Baden-Württemberg", "North Rhine-Westphalia", "Île-de-France", "Catalonia",
+  "Lombardy", "Andalusia", "New South Wales", "Victoria", "Queensland",
 ];
 const COUNTRIES = [
-  "United States", "Canada", "United Kingdom", "Australia", "Germany",
-  "France", "Japan", "Spain", "Italy", "Brazil", "India", "Mexico",
-  "Netherlands", "Sweden", "South Korea", "Singapore", "New Zealand",
+  "United States", "Canada", "United Kingdom", "Australia", "Germany", "France", "Japan",
+  "Spain", "Italy", "Brazil", "India", "Mexico", "Netherlands", "Sweden", "South Korea",
+  "Singapore", "New Zealand", "Switzerland", "Norway", "Denmark", "Finland", "Portugal",
+  "Austria", "Belgium", "Poland", "Argentina", "Chile", "Colombia", "South Africa", "Nigeria",
+  "Egypt", "Turkey", "Israel", "Saudi Arabia", "United Arab Emirates", "Thailand", "Indonesia",
+  "Malaysia", "Philippines", "Vietnam", "China", "Taiwan", "Hong Kong", "Ireland", "Greece",
 ];
-const COUNTRY_CODES = ["US", "CA", "GB", "AU", "DE", "FR", "JP", "ES", "IT", "BR", "IN", "MX", "NL", "SE", "KR", "SG", "NZ"];
-const COMPANY_PREFIXES = ["Acme", "Globex", "Initech", "Umbrella", "Stark", "Wayne", "Hooli", "Pied Piper", "Dunder Mifflin", "Vehement Capital"];
-const COMPANY_SUFFIXES = ["Corp", "Inc", "LLC", "Industries", "Technologies", "Solutions", "Systems", "Group", "Labs", "Digital"];
-const DEPARTMENTS = ["Engineering", "Product", "Design", "Marketing", "Sales", "Finance", "HR", "Legal", "Operations", "Support"];
+const COUNTRY_CODES = [
+  "US", "CA", "GB", "AU", "DE", "FR", "JP", "ES", "IT", "BR", "IN", "MX", "NL", "SE", "KR",
+  "SG", "NZ", "CH", "NO", "DK", "FI", "PT", "AT", "BE", "PL", "AR", "CL", "CO", "ZA", "NG",
+  "EG", "TR", "IL", "SA", "AE", "TH", "ID", "MY", "PH", "VN", "CN", "TW", "HK", "IE", "GR",
+];
+const COMPANIES = [
+  // Tech
+  "Meridian Software", "Apex Systems", "Crestline Technologies", "Vantage Digital", "Ironclad Labs",
+  "Brightpath Solutions", "Silverline Tech", "Northstar Engineering", "Cascade Software", "Pinnacle Systems",
+  "Redwood Technologies", "Clearwater Digital", "Granite Systems", "Riverstone Labs", "Summit Tech",
+  "Fieldstone Software", "Harborview Technologies", "Lakeland Systems", "Stonegate Digital", "Ridgeline Labs",
+  // Finance
+  "Compass Capital", "Keystone Financial", "Bridgewater Advisors", "Crestwood Partners", "Landmark Equity",
+  "Springdale Ventures", "Oakridge Capital", "Elmwood Investment Group", "Cedarwood Asset Management",
+  // Healthcare
+  "Greenfield Health", "Clearfield Medical", "Valleyview Healthcare", "Hillside Diagnostics",
+  // Retail / Consumer
+  "Harborside Goods", "Meadowbrook Retail", "Cornerstone Market", "Sunridge Commerce",
+  // Consulting
+  "Broadview Consulting", "Highpoint Advisory", "Milestone Group", "Waypoint Strategy",
+];
+const DEPARTMENTS = [
+  "Engineering", "Product", "Design", "Marketing", "Sales", "Finance", "Accounting",
+  "Human Resources", "Legal", "Operations", "Customer Success", "Support", "Security",
+  "Data Science", "Research", "Infrastructure", "DevOps", "Quality Assurance", "Analytics",
+  "Business Development", "Partnerships", "Communications", "Procurement", "Compliance",
+];
 const JOB_TITLES = [
-  "Software Engineer", "Product Manager", "Designer", "Marketing Manager", "Sales Representative",
-  "Data Scientist", "DevOps Engineer", "QA Engineer", "Technical Writer", "Engineering Manager",
-  "Director of Engineering", "VP of Product", "Chief Technology Officer", "Frontend Developer", "Backend Developer",
+  // Engineering
+  "Software Engineer", "Senior Software Engineer", "Staff Engineer", "Principal Engineer",
+  "Frontend Developer", "Backend Developer", "Full Stack Engineer", "Mobile Developer",
+  "DevOps Engineer", "Site Reliability Engineer", "Platform Engineer", "Security Engineer",
+  "Data Engineer", "Machine Learning Engineer", "Engineering Manager", "Director of Engineering",
+  "VP of Engineering", "Chief Technology Officer",
+  // Product / Design
+  "Product Manager", "Senior Product Manager", "Director of Product", "VP of Product",
+  "UX Designer", "Product Designer", "UI Designer", "Design Lead", "Head of Design",
+  // Data
+  "Data Scientist", "Data Analyst", "Business Intelligence Analyst", "Analytics Engineer",
+  // Marketing / Sales
+  "Marketing Manager", "Content Strategist", "Growth Manager", "SEO Specialist",
+  "Sales Representative", "Account Executive", "Account Manager", "Sales Manager",
+  "Customer Success Manager", "Solutions Engineer",
+  // Operations / Finance
+  "Operations Manager", "Project Manager", "Program Manager", "Scrum Master",
+  "Financial Analyst", "Controller", "CFO", "HR Manager", "Recruiter", "Office Manager",
+  // Other
+  "Technical Writer", "QA Engineer", "Support Engineer", "Developer Advocate",
 ];
-const LOREM_SENTENCES = [
-  "Lorem ipsum dolor sit amet, consectetur adipiscing elit.",
-  "Sed do eiusmod tempor incididunt ut labore et dolore magna aliqua.",
-  "Ut enim ad minim veniam, quis nostrud exercitation ullamco.",
-  "Duis aute irure dolor in reprehenderit in voluptate velit esse.",
-  "Excepteur sint occaecat cupidatat non proident sunt in culpa.",
-  "Pellentesque habitant morbi tristique senectus et netus et malesuada.",
-  "Integer nec odio, praesent libero, sed cursus ante dapibus diam.",
-  "This feature enables seamless integration with existing workflows.",
-  "Users can configure advanced settings to match their specific requirements.",
-  "The system automatically handles retries and error recovery for reliability.",
+const DESCRIPTIONS = [
+  // Generic product/feature
+  "Streamlines the onboarding process for new users with a guided setup experience.",
+  "Provides real-time visibility into system performance and operational metrics.",
+  "Enables teams to collaborate on documents with version history and inline comments.",
+  "Automates repetitive tasks to reduce manual effort and minimize human error.",
+  "Integrates with existing tools in your workflow via a flexible REST API.",
+  "Delivers personalized recommendations based on user behavior and preferences.",
+  "Ensures data consistency across distributed systems with conflict-free merging.",
+  "Scales horizontally to handle traffic spikes without manual intervention.",
+  "Supports multi-tenant architecture with strict data isolation between organizations.",
+  "Offers fine-grained access control with role-based permissions and audit logs.",
+  // User bio / about
+  "Passionate about building products that make a real difference in people's lives.",
+  "Over ten years of experience shipping software at high-growth startups and enterprise companies.",
+  "Focused on creating accessible, performant interfaces that users actually enjoy using.",
+  "Strong believer in developer experience and the power of well-designed abstractions.",
+  "Enjoys mentoring junior engineers and fostering a culture of continuous learning.",
+  "Writes about technology, product management, and distributed systems on occasion.",
+  "Based in San Francisco. Previously at three Y Combinator companies.",
+  "Open source contributor and occasional conference speaker.",
+  "Obsessed with data quality and making analytics trustworthy at scale.",
+  "Combines a background in statistics with a love for clean, maintainable code.",
 ];
 const TITLES = [
-  "Introduction to Testing", "Advanced TypeScript", "The Art of Mocking", "Schema-Driven Development",
-  "Getting Started with Zod", "Building Reliable APIs", "Modern Web Architecture", "Clean Code Principles",
-  "Performance Optimization Guide", "Security Best Practices", "Database Design Patterns", "CI/CD Handbook",
+  // Tech / Dev
+  "Getting Started with TypeScript", "Advanced React Patterns", "Building Reliable APIs",
+  "Microservices in Practice", "The Art of Code Review", "Database Design for Scale",
+  "CI/CD Best Practices", "Security Fundamentals for Engineers", "Observability Deep Dive",
+  "GraphQL vs REST: A Practical Comparison",
+  // Product / Business
+  "Product Roadmap Q3 2025", "Launch Plan: Phase One", "Competitive Analysis Report",
+  "Customer Research Summary", "OKRs for the Engineering Team", "Quarterly Business Review",
+  "Go-to-Market Strategy", "Post-Mortem: Incident #4821", "Team Retrospective Notes",
+  "Design System Documentation",
+  // General
+  "Introduction to Machine Learning", "A Guide to Remote Work", "Hiring Manager Handbook",
+  "Onboarding Checklist", "Performance Review Template", "Meeting Notes: Weekly Sync",
+  "Project Proposal: Platform Migration", "Architecture Decision Record #12",
 ];
 const EMAIL_SUBJECTS = [
-  "Action Required: Please review your account",
-  "Your order has been shipped",
-  "Welcome to the platform!",
-  "Password reset request",
-  "Weekly digest for your team",
-  "New comment on your post",
-  "Invitation to collaborate",
-  "Meeting reminder: Tomorrow at 10am",
+  "Action required: review your recent account activity",
+  "Your order has shipped — track your package",
+  "Welcome to the platform — let's get you started",
+  "Reset your password",
+  "Your weekly digest is ready",
+  "Someone commented on your post",
+  "You've been invited to collaborate",
+  "Reminder: meeting tomorrow at 10am",
+  "Your trial ends in 3 days",
+  "New message from your team",
+  "Invoice #4821 is ready for review",
+  "Your export is ready to download",
+  "Security alert: new sign-in detected",
+  "We've updated our terms of service",
+  "Your subscription has been renewed",
 ];
 const TAGS = [
-  "javascript", "typescript", "react", "node", "api", "frontend", "backend", "devops",
-  "testing", "performance", "security", "ux", "design", "mobile", "cloud", "database",
+  // Tech
+  "javascript", "typescript", "python", "rust", "go", "react", "vue", "angular", "svelte",
+  "node", "deno", "bun", "api", "rest", "graphql", "grpc", "websockets",
+  "frontend", "backend", "fullstack", "devops", "infrastructure", "cloud", "serverless",
+  "aws", "gcp", "azure", "docker", "kubernetes", "terraform",
+  "testing", "ci-cd", "performance", "security", "accessibility", "seo",
+  "database", "postgresql", "mysql", "mongodb", "redis", "elasticsearch",
+  "machine-learning", "ai", "data-science", "analytics",
+  // Product / Business
+  "design", "ux", "product", "mobile", "ios", "android",
+  "startup", "open-source", "saas", "b2b", "b2c",
 ];
-const LOCALES = ["en-US", "en-GB", "fr-FR", "de-DE", "es-ES", "pt-BR", "ja-JP", "ko-KR", "zh-CN", "nl-NL", "sv-SE", "it-IT"];
+const LOCALES = [
+  "en-US", "en-GB", "en-AU", "en-CA", "en-NZ",
+  "fr-FR", "fr-CA", "fr-BE",
+  "de-DE", "de-AT", "de-CH",
+  "es-ES", "es-MX", "es-AR", "es-CO",
+  "pt-BR", "pt-PT",
+  "it-IT", "nl-NL", "sv-SE", "no-NO", "da-DK", "fi-FI", "pl-PL",
+  "ja-JP", "ko-KR", "zh-CN", "zh-TW", "zh-HK",
+  "ar-SA", "he-IL", "tr-TR", "ru-RU",
+];
 const TIMEZONES = [
   "America/New_York", "America/Chicago", "America/Denver", "America/Los_Angeles",
-  "America/Sao_Paulo", "Europe/London", "Europe/Paris", "Europe/Berlin",
-  "Asia/Tokyo", "Asia/Shanghai", "Asia/Singapore", "Australia/Sydney",
+  "America/Toronto", "America/Vancouver", "America/Sao_Paulo", "America/Argentina/Buenos_Aires",
+  "America/Mexico_City", "America/Bogota", "America/Lima", "America/Santiago",
+  "Europe/London", "Europe/Paris", "Europe/Berlin", "Europe/Madrid", "Europe/Rome",
+  "Europe/Amsterdam", "Europe/Stockholm", "Europe/Zurich", "Europe/Warsaw", "Europe/Istanbul",
+  "Asia/Tokyo", "Asia/Seoul", "Asia/Shanghai", "Asia/Singapore", "Asia/Mumbai",
+  "Asia/Kolkata", "Asia/Bangkok", "Asia/Dubai", "Asia/Jerusalem",
+  "Australia/Sydney", "Australia/Melbourne", "Pacific/Auckland",
 ];
-const CURRENCY_CODES = ["USD", "EUR", "GBP", "CAD", "AUD", "JPY", "CHF", "CNY", "INR", "BRL", "MXN", "KRW"];
+const CURRENCY_CODES = [
+  "USD", "EUR", "GBP", "CAD", "AUD", "JPY", "CHF", "CNY", "HKD", "NZD",
+  "SEK", "NOK", "DKK", "SGD", "INR", "BRL", "MXN", "KRW", "ZAR", "TRY",
+  "PLN", "CZK", "HUF", "ILS", "SAR", "AED", "THB", "MYR", "IDR", "PHP",
+];
 const MIME_TYPES = [
-  "application/json", "application/pdf", "application/zip", "application/octet-stream",
-  "text/html", "text/plain", "text/csv",
-  "image/jpeg", "image/png", "image/gif", "image/webp", "image/svg+xml",
-  "audio/mpeg", "video/mp4",
+  "application/json", "application/ld+json", "application/pdf", "application/zip",
+  "application/gzip", "application/x-tar", "application/octet-stream",
+  "application/vnd.ms-excel", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+  "application/msword", "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+  "text/html", "text/plain", "text/csv", "text/xml", "text/markdown",
+  "image/jpeg", "image/png", "image/gif", "image/webp", "image/svg+xml", "image/avif",
+  "audio/mpeg", "audio/ogg", "audio/wav",
+  "video/mp4", "video/webm", "video/ogg",
+  "font/woff", "font/woff2",
 ];

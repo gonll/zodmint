@@ -1,8 +1,8 @@
-# zod-mock-forge
+# zodmint
 
 Your schema, is your mock's source of truth.
 
-Most test fixture libraries treat schema validation as an afterthought. You hand-write factories, sprinkle in faker calls, and somewhere down the line a test passes locally but blows up in CI because `faker.number.int()` produced a value that fails your `.positive()` constraint. zod-mock-forge takes the opposite approach: the schema is the source of truth, and every value it generates is guaranteed to pass `schema.safeParse(output).success === true`.
+Most test fixture libraries treat schema validation as an afterthought. You hand-write factories, sprinkle in faker calls, and somewhere down the line a test passes locally but blows up in CI because `faker.number.int()` produced a value that fails your `.positive()` constraint. zodmint takes the opposite approach: the schema is the source of truth, and every value it generates is guaranteed to pass `schema.safeParse(output).success === true`.
 
 No more babysitting fixtures. No more silent invalidity.
 
@@ -18,10 +18,10 @@ Do you need a user?
 const user = mock(UserSchema);
 ```
 
-Internally, zod-mock-forge walks the schema definition, resolves constraints, applies semantic inference from field names, and runs a single `safeParse` to get the fully-transformed output type. The result is always typed as `z.infer<typeof schema>` — no `any`, no casting.
+Internally, zodmint walks the schema definition, resolves constraints, applies semantic inference from field names, and runs a single `safeParse` to get the fully-transformed output type. The result is always typed as `z.infer<typeof schema>` — no `any`, no casting.
 
 ```typescript
-import { mock } from "zod-mock-forge";
+import { mock } from "zodmint";
 import { z } from "zod";
 
 const UserSchema = z.object({
@@ -40,7 +40,7 @@ const user = mock(UserSchema);
 ## Installation
 
 ```bash
-npm install zod-mock-forge
+npm install zodmint
 ```
 
 zod is a peer dependency, so make sure it's already in your project:
@@ -60,7 +60,7 @@ Requires zod `>=3.23.0`. Zod v3 and v4 are both supported.
 The primary function. Generates a single value from any Zod schema.
 
 ```typescript
-import { mock } from "zod-mock-forge";
+import { mock } from "zodmint";
 
 const user = mock(UserSchema);
 
@@ -75,7 +75,7 @@ const user = mock(UserSchema, {
 
 Options:
 
-`overrides` lets you pin specific fields while letting zod-mock-forge fill in the rest. Overrides are deep-merged, so you can target nested fields without recreating the entire object. If an override produces a value that fails schema validation, a `ZodForgeError [INVALID_OVERRIDE]` is thrown with the path and failing value clearly named.
+`overrides` lets you pin specific fields while letting zodmint fill in the rest. Overrides are deep-merged, so you can target nested fields without recreating the entire object. If an override produces a value that fails schema validation, a `ZodForgeError [INVALID_OVERRIDE]` is thrown with the path and failing value clearly named.
 
 `seed` makes generation deterministic. Same seed on the same schema produces the same output every time — useful for snapshot tests and reproducible bug reports. Determinism is guaranteed within a major version, but not across major versions (generators can be improved between releases).
 
@@ -96,7 +96,7 @@ One thing worth understanding: `mock()` captures an immutable snapshot of the gl
 Returns a reusable factory function. Useful when you need multiple instances of the same shape with per-call variation.
 
 ```typescript
-import { mockFactory } from "zod-mock-forge";
+import { mockFactory } from "zodmint";
 
 const createUser = mockFactory(UserSchema);
 
@@ -122,7 +122,7 @@ const user = createActiveUser({ overrides: { name: "Dave" } });
 Generates an array of individual fixtures — not to be confused with `mock(z.array(schema))`.
 
 ```typescript
-import { mockList } from "zod-mock-forge";
+import { mockList } from "zodmint";
 
 const users = mockList(UserSchema); // 1–5 items
 const users = mockList(UserSchema, { count: 10 });
@@ -141,7 +141,7 @@ The distinction matters: `mockList(UserSchema)` calls `mock(UserSchema)` N times
 Sets global defaults that apply to every `mock()` call. Useful for test suite-level configuration.
 
 ```typescript
-import { configure } from "zod-mock-forge";
+import { configure } from "zodmint";
 
 configure({
   maxDepth: 3,
@@ -162,7 +162,7 @@ configure({
 Resets everything back to defaults. Call this in `afterEach` to keep tests isolated:
 
 ```typescript
-import { resetConfig } from "zod-mock-forge";
+import { resetConfig } from "zodmint";
 
 afterEach(() => resetConfig());
 ```
@@ -171,11 +171,11 @@ afterEach(() => resetConfig());
 
 ### `zodForgeMatchers` (testing utilities)
 
-Import from `"zod-mock-forge/testing"` to get a `toMatchSchema` custom matcher for vitest/jest:
+Import from `"zodmint/testing"` to get a `toMatchSchema` custom matcher for vitest/jest:
 
 ```typescript
 // vitest.setup.ts (or jest.setup.ts)
-import { zodForgeMatchers } from "zod-mock-forge/testing";
+import { zodForgeMatchers } from "zodmint/testing";
 import { expect } from "vitest";
 expect.extend(zodForgeMatchers);
 
@@ -190,7 +190,7 @@ On failure, the error message lists each schema violation with its path.
 
 ## Semantic Inference
 
-When no explicit format constraint is present, zod-mock-forge looks at the field name (the leaf key of the path) and tries to produce something meaningful. An `email` field gets a valid email address. An `age` field gets an integer between 18 and 80. A `createdAt` field gets an ISO date string.
+When no explicit format constraint is present, zodmint looks at the field name (the leaf key of the path) and tries to produce something meaningful. An `email` field gets a valid email address. An `age` field gets an integer between 18 and 80. A `createdAt` field gets an ISO date string.
 
 This is entirely opt-in by nature — it just works based on naming conventions you probably already follow.
 
@@ -239,7 +239,7 @@ Matchers are tested in order and the first match wins.
 
 ## Constraints
 
-zod-mock-forge handles all standard Zod constraints. Here's the full picture:
+zodmint handles all standard Zod constraints. Here's the full picture:
 
 **Strings:** `.min(n)` produces at least n characters. `.max(n)` caps at n characters. `.length(n)` produces exactly n characters. `.email()` produces a valid email. `.url()` produces a valid URL. `.uuid()` produces a UUID v4. `.startsWith(s)` and `.endsWith(s)` are respected. `.cuid()`, `.cuid2()`, `.ulid()`, `.nanoid()`, `.jwt()`, `.datetime()`, `.date()` (YYYY-MM-DD), `.time()` (HH:MM:SS), `.duration()` (ISO 8601), `.ip()` / `.ipv4()` / `.ipv6()`, `.cidrv4()` / `.cidrv6()`, `.emoji()`, `.base64()`, and `.base64url()` all produce format-correct values.
 
@@ -288,7 +288,7 @@ configure({
 
 ## Refinements
 
-`z.refine()` and `z.superRefine()` are supported via a generate-and-test strategy. zod-mock-forge generates a candidate from the base schema, evaluates the refinement, and retries with a different seed if it fails — up to `refinementRetries` attempts (default: 10).
+`z.refine()` and `z.superRefine()` are supported via a generate-and-test strategy. zodmint generates a candidate from the base schema, evaluates the refinement, and retries with a different seed if it fails — up to `refinementRetries` attempts (default: 10).
 
 ```typescript
 const schema = z.object({
@@ -316,7 +316,7 @@ If all retries are exhausted, `ZodForgeError [GENERATION_FAILED]` is thrown with
 
 ## Schema Descriptions as Semantic Hints
 
-`z.describe()` lets you attach a semantic hint directly to a schema. zod-mock-forge reads it and uses it as a generation hint, taking priority over the field name:
+`z.describe()` lets you attach a semantic hint directly to a schema. zodmint reads it and uses it as a generation hint, taking priority over the field name:
 
 ```typescript
 const schema = z.object({
@@ -437,7 +437,7 @@ Overrides are not supported on schemas containing `.transform()`. The output of 
 
 ## Zod Type Coverage
 
-zod-mock-forge handles the full Zod type system with a few noted exceptions.
+zodmint handles the full Zod type system with a few noted exceptions.
 
 `z.string()`, `z.number()`, `z.boolean()`, `z.bigint()`, `z.date()` — full constraint support.
 
@@ -459,7 +459,7 @@ zod-mock-forge handles the full Zod type system with a few noted exceptions.
 
 `z.readonly(T)` ignores the readonly wrapper and generates from the inner type. `z.string().brand<B>()` and `z.number().brand<B>()` ignore the brand and generate the underlying type.
 
-`z.coerce.string()`, `z.coerce.number()`, `z.coerce.boolean()`, `z.coerce.bigint()`, and `z.coerce.date()` are fully supported — zod-mock-forge generates the target type directly. The coerce transform is a no-op on a value that's already the correct native type, so `safeParse` always succeeds.
+`z.coerce.string()`, `z.coerce.number()`, `z.coerce.boolean()`, `z.coerce.bigint()`, and `z.coerce.date()` are fully supported — zodmint generates the target type directly. The coerce transform is a no-op on a value that's already the correct native type, so `safeParse` always succeeds.
 
 `z.unknown()` and `z.any()` produce a random primitive (string, number, or boolean). `z.nan()` returns `NaN` — see the warning below. `z.void()` returns `undefined`.
 
@@ -478,7 +478,7 @@ zod-mock-forge handles the full Zod type system with a few noted exceptions.
 All errors are instances of `ZodForgeError` and carry a `code` property. Error messages always include the schema path.
 
 ```typescript
-import { ZodForgeError } from "zod-mock-forge";
+import { ZodForgeError } from "zodmint";
 
 try {
   mock(schema, { overrides: { address: { age: -5 } } });
@@ -536,7 +536,7 @@ const user = {
 schema.parse(user); // boom
 ```
 
-zod-mock-forge derives the data from the schema itself, so constraints are always satisfied by construction. When the schema changes, the fixtures automatically adapt.
+zodmint derives the data from the schema itself, so constraints are always satisfied by construction. When the schema changes, the fixtures automatically adapt.
 
 ---
 
