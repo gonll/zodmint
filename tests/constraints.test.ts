@@ -86,7 +86,7 @@ describe("string constraints", () => {
   });
 
   it("unsatisfiable min > max throws an error", () => {
-    // v3: zod-forge throws GENERATION_FAILED; v4: Zod itself throws SyntaxError during schema creation
+    // v3: zodmint throws GENERATION_FAILED; v4: Zod itself throws SyntaxError during schema creation
     expect(() => mock(z.string().min(10).max(5))).toThrow();
   });
 
@@ -223,6 +223,24 @@ describe("string constraints", () => {
     const s = mock(schema);
     expect(schema.safeParse(s).success).toBe(true);
   });
+
+  it("edge mode: startsWith and endsWith both satisfied", () => {
+    const schema = z.string().startsWith("foo").endsWith("bar");
+    const result = mock(schema, { mode: "edge" });
+    expect(result.startsWith("foo")).toBe(true);
+    expect(result.endsWith("bar")).toBe(true);
+    expect(schema.safeParse(result).success).toBe(true);
+  });
+
+  it("realistic mode: startsWith and endsWith both satisfied", () => {
+    const schema = z.string().startsWith("hello").endsWith("world");
+    for (let seed = 0; seed < 10; seed++) {
+      const result = mock(schema, { seed });
+      expect(result.startsWith("hello")).toBe(true);
+      expect(result.endsWith("world")).toBe(true);
+      expect(schema.safeParse(result).success).toBe(true);
+    }
+  });
 });
 
 describe("number constraints", () => {
@@ -279,6 +297,33 @@ describe("number constraints", () => {
     } catch (e) {
       expect((e as ZodForgeError).code).toBe("GENERATION_FAILED");
     }
+  });
+
+  it("z.number().positive() never generates 0 or negative", () => {
+    const schema = z.number().positive();
+    const results = Array.from({ length: 50 }, (_, i) => mock(schema, { seed: i }));
+    results.forEach(r => {
+      expect(r).toBeGreaterThan(0);
+      expect(schema.safeParse(r).success).toBe(true);
+    });
+  });
+
+  it("z.number().negative() never generates 0 or positive", () => {
+    const schema = z.number().negative();
+    const results = Array.from({ length: 50 }, (_, i) => mock(schema, { seed: i }));
+    results.forEach(r => {
+      expect(r).toBeLessThan(0);
+      expect(schema.safeParse(r).success).toBe(true);
+    });
+  });
+
+  it("z.number().nonnegative() can generate 0", () => {
+    const schema = z.number().nonnegative();
+    const results = Array.from({ length: 30 }, (_, i) => mock(schema, { seed: i }));
+    results.forEach(r => {
+      expect(r).toBeGreaterThanOrEqual(0);
+      expect(schema.safeParse(r).success).toBe(true);
+    });
   });
 });
 

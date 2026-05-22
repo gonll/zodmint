@@ -73,6 +73,7 @@ function dispatch(
   ctx: GenerationContext,
   config: GlobalConfig,
   leaf: string | null,
+  skipRefinementDetection = false,
 ): unknown {
   // Path-based generator override — checked before anything else
   if (Object.keys(ctx.generators).length > 0) {
@@ -91,15 +92,17 @@ function dispatch(
     }
   }
 
-  // v4: schema has embedded refinement checks (z.refine() / z.superRefine())
-  // Use generate-and-test strategy: strip custom checks, generate candidate, validate with full schema
-  if (hasRefinementChecks(schema)) {
-    return dispatchRefinement(schema, ctx, config, leaf, true);
-  }
+  if (!skipRefinementDetection) {
+    // v4: schema has embedded refinement checks (z.refine() / z.superRefine())
+    // Use generate-and-test strategy: generate candidate, validate with full schema
+    if (hasRefinementChecks(schema)) {
+      return dispatchRefinement(schema, ctx, config, leaf, true);
+    }
 
-  // v3: ZodEffects with effect.type === "refinement"
-  if (isV3Refinement(schema)) {
-    return dispatchRefinement(schema, ctx, config, leaf, false);
+    // v3: ZodEffects with effect.type === "refinement"
+    if (isV3Refinement(schema)) {
+      return dispatchRefinement(schema, ctx, config, leaf, false);
+    }
   }
 
   const tn = typeName(schema);
@@ -268,6 +271,15 @@ function dispatch(
       const innerValue = dispatch(innerSchema, ctx, config, leaf);
       return Promise.resolve(innerValue);
     }
+
+    case "custom":
+      // z.custom<T>() — we cannot generate against an arbitrary user-supplied predicate.
+      // Use a path-based generator override to supply a valid value directly.
+      throw new ZodForgeError(
+        `z.custom() at ${formatPath(ctx.path)} is not supported. Use a path-based generator instead: ` +
+          `generators: { "${ctx.path.join(".")}" : () => yourValue }`,
+        "UNSUPPORTED_SCHEMA",
+      );
 
     case "symbol":
       throw new ZodForgeError(
@@ -512,13 +524,30 @@ function dispatchNumber(
       }
     }
 
-    // Handle nonnegative / nonpositive in v3
+    // Handle positive / nonnegative / negative / nonpositive in v3.
+    // .positive() → { kind: "min", value: 0, inclusive: false }
+    // .nonnegative() → { kind: "min", value: 0, inclusive: true }
+    // .negative() → { kind: "max", value: 0, inclusive: false }
+    // .nonpositive() → { kind: "max", value: 0, inclusive: true }
     for (const check of checks) {
-      if (check.kind === "min" && check.value > 0) c.positive = true;
-      if (check.kind === "min" && check.value === 0) c.nonnegative = true;
-      if (check.kind === "max" && check.value < 0) c.negative = true;
-      if (check.kind === "max" && check.value === 0 && check.inclusive === false) c.negative = true;
-      if (check.kind === "max" && check.value === 0 && check.inclusive !== false) c.nonpositive = true;
+      if (check.kind === "min") {
+        if (check.value > 0) {
+          c.positive = true;
+        } else if (check.value === 0 && check.inclusive === false) {
+          c.positive = true;  // .positive() → min(0, exclusive) → must be > 0
+        } else if (check.value === 0) {
+          c.nonnegative = true;  // .nonnegative() → min(0, inclusive)
+        }
+      }
+      if (check.kind === "max") {
+        if (check.value < 0) {
+          c.negative = true;
+        } else if (check.value === 0 && check.inclusive === false) {
+          c.negative = true;  // .negative() → max(0, exclusive) → must be < 0
+        } else if (check.value === 0) {
+          c.nonpositive = true;  // .nonpositive() → max(0, inclusive)
+        }
+      }
     }
   }
 
@@ -1009,15 +1038,25 @@ function dispatchLazy(
 
 /**
  * Generates a value for a schema containing refinements by repeatedly
- * generating candidates from the base schema (without refinements) and
- * checking whether they satisfy the full refined schema via safeParse.
+ * generating candidates from the base schema and checking whether they
+ * satisfy the full refined schema via safeParse.
+ *
+ * For v4 schemas: dispatch directly on the original schema. Constraint
+ * builders only read structural checks (min/max/format) and silently ignore
+ * "custom" check entries (refinement predicates), so dispatching against the
+ * original schema is safe — the custom checks are invisible to generation.
+ * The refinement predicate is evaluated only by the safeParse call below.
+ *
+ * For v3 ZodEffects refinements: unwrap the inner schema via
+ * getRefinementInner so dispatch sees the underlying type (e.g. ZodString)
+ * rather than the ZodEffects wrapper.
  *
  * @param schema  - The full refined schema (used for safeParse validation)
  * @param ctx     - Current generation context (ctx.refinementRetries controls max attempts)
  * @param config  - Global config
  * @param leaf    - Leaf key hint for semantic generation
- * @param isV4Schema - If true, use stripRefinementChecks to get base schema;
- *                     if false, use getRefinementInner (v3 ZodEffects path)
+ * @param isV4Schema - If true, dispatch on schema directly (v4 path);
+ *                     if false, unwrap via getRefinementInner (v3 ZodEffects path)
  */
 function dispatchRefinement(
   schema: z.ZodTypeAny,
@@ -1026,7 +1065,9 @@ function dispatchRefinement(
   leaf: string | null,
   isV4Schema: boolean,
 ): unknown {
-  const baseSchema = isV4Schema ? stripRefinementChecks(schema) : getRefinementInner(schema);
+  // For v4: dispatch on the original schema — custom checks are ignored by constraint builders.
+  // For v3: unwrap the ZodEffects wrapper to get the inner type.
+  const baseSchema = isV4Schema ? schema : getRefinementInner(schema);
   const maxAttempts = ctx.refinementRetries;
 
   for (let attempt = 0; attempt < maxAttempts; attempt++) {
@@ -1037,7 +1078,12 @@ function dispatchRefinement(
       rng: createSeededRNG(attemptSeed),
     };
 
-    const candidate = dispatch(baseSchema, attemptCtx, config, leaf);
+    // For v4: pass skipRefinementDetection=true to avoid re-entering this
+    // function when dispatching on the original schema (which still has custom
+    // checks). Constraint builders ignore "custom" check entries, so generation
+    // is unaffected. For v3: baseSchema is already the unwrapped inner type, so
+    // normal dispatch is safe (no refinement detection needed either).
+    const candidate = dispatch(baseSchema, attemptCtx, config, leaf, true);
     const result = schema.safeParse(candidate);
     if (result.success) return result.data;
   }

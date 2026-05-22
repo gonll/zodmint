@@ -89,6 +89,16 @@ describe("UNSUPPORTED_SCHEMA errors", () => {
     }
   });
 
+  it("z.custom() throws UNSUPPORTED_SCHEMA with helpful message", () => {
+    const schema = z.custom<string>(v => typeof v === "string");
+    expect(() => mock(schema)).toThrow(ZodForgeError);
+    try { mock(schema); } catch (e) {
+      expect((e as ZodForgeError).code).toBe("UNSUPPORTED_SCHEMA");
+      expect((e as ZodForgeError).message).toContain("z.custom()");
+      expect((e as ZodForgeError).message).toContain("path-based generator");
+    }
+  });
+
   // z.refine() no longer throws UNSUPPORTED_SCHEMA — it uses generate-and-test.
   // Unsatisfiable refinements throw GENERATION_FAILED (tested in GENERATION_FAILED block).
 

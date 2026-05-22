@@ -485,36 +485,22 @@ export function hasRefinementChecks(schema: z.ZodTypeAny): boolean {
 }
 
 /**
- * Returns a copy of the v4 schema's checks array with all custom/refinement
- * checks removed. Used by dispatchRefinement to generate a base value from
- * the un-refined schema, then test it against the full schema.
+ * Returns the schema unchanged.
+ *
+ * In Zod v4, `_zod` is defined as non-configurable on schema instances, so
+ * cloning and replacing it via Object.defineProperty throws
+ * "Cannot redefine property: _zod". Stripping custom checks from a clone is
+ * therefore not viable.
+ *
+ * The correct approach is to dispatch directly on the original schema:
+ * constraint builders (dispatchString, dispatchNumber, etc.) only read
+ * structural checks (min/max/format) and silently ignore unknown check types
+ * such as "custom" (refinement predicates). The candidate is then validated
+ * against the full schema (including the refinement) via safeParse in
+ * dispatchRefinement — which is the correct place for predicate evaluation.
  */
-// eslint-disable-next-line @typescript-eslint/no-explicit-any
 export function stripRefinementChecks(schema: z.ZodTypeAny): z.ZodTypeAny {
-  if (!isV4(schema)) return schema;
-  const def = rawDef(schema);
-  const checks = (def.checks ?? []) as unknown[];
-  const nonCustomChecks = checks.filter((c) => {
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    const cd = (c as any)?._zod?.def;
-    return cd?.check !== "custom";
-  });
-  if (nonCustomChecks.length === checks.length) return schema; // no change needed
-  // Reconstruct the schema without custom checks by cloning def with filtered checks
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  const stripped = Object.create(Object.getPrototypeOf(schema)) as any;
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  const originalDef = (schema as any)._zod;
-  Object.defineProperty(stripped, "_zod", {
-    value: {
-      ...originalDef,
-      def: { ...def, checks: nonCustomChecks },
-    },
-    writable: true,
-    configurable: true,
-    enumerable: false,
-  });
-  return stripped as z.ZodTypeAny;
+  return schema;
 }
 
 // ---------------------------------------------------------------------------

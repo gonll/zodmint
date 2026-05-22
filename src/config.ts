@@ -76,3 +76,18 @@ export function configure(options: Partial<GlobalConfig>): void {
 export function resetConfig(): void {
   globalConfig = { ...DEFAULT_CONFIG, matchers: [] };
 }
+
+/**
+ * Runs `fn` with a temporarily-scoped config, then restores the previous config.
+ * Useful in tests or isolated contexts where you need a one-off config change
+ * without polluting the global state.
+ */
+export function withConfig<T>(options: Partial<GlobalConfig>, fn: () => T): T {
+  const previous = snapshotConfig();
+  configure(options);
+  try {
+    return fn();
+  } finally {
+    globalConfig = previous as GlobalConfig;
+  }
+}

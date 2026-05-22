@@ -1,5 +1,5 @@
 {
-  "name": "zod-mock-forge",
+  "name": "zodmint",
   "version": "1.4.1",
   "description": "TypeScript-first schema-valid test fixture generator for Zod schemas",
   "type": "module",

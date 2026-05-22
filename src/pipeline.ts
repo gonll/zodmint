@@ -102,7 +102,7 @@ export function runPipeline<S extends z.ZodTypeAny>(
     }
     throw new ZodForgeError(
       `Generated value at ${formatPath(ctx.path)} failed schema validation: ${parsed.error.message}. ` +
-        `This is likely a bug in zod-forge — please report it.`,
+        `This is likely a bug in zodmint — please report it.`,
       "GENERATION_FAILED",
     );
   }

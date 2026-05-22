@@ -6,7 +6,7 @@ import { z } from "zod";
  *
  * @example
  * // vitest.setup.ts
- * import { zodForgeMatchers } from "zod-mock-forge/testing";
+ * import { zodForgeMatchers } from "zodmint/testing";
  * expect.extend(zodForgeMatchers);
  *
  * // in tests:
