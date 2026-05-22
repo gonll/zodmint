@@ -44,6 +44,57 @@ export interface MockOptions<S extends z.ZodTypeAny = z.ZodTypeAny> {
   refinementRetries?: number;
 }
 
+/**
+ * Options for `mockFactory()`. Extends `MockOptions` with factory-specific features:
+ * states, afterBuild, and extend().
+ */
+export interface MockFactoryOptions<S extends z.ZodTypeAny = z.ZodTypeAny>
+  extends MockOptions<S> {
+  /**
+   * Named state variants. Each state is a set of partial overrides that can be
+   * activated by name when calling the factory. States are merged left-to-right,
+   * then per-call overrides win.
+   *
+   * @example
+   * const factory = mockFactory(UserSchema, {
+   *   states: {
+   *     admin:   { role: "admin" },
+   *     banned:  { banned: true, bannedAt: new Date(0) },
+   *   },
+   * });
+   * factory({ states: "admin" });
+   * factory({ states: ["admin", "banned"] }); // merged
+   */
+  states?: Record<string, DeepPartial<z.infer<S>>>;
+  /**
+   * Post-generation hook. Called with the fully-generated (and override-merged)
+   * value before it is returned. Ideal for derived fields or cross-field logic.
+   *
+   * @example
+   * const factory = mockFactory(PostSchema, {
+   *   afterBuild: (post) => ({ ...post, slug: post.title.toLowerCase().replace(/ /g, "-") }),
+   * });
+   */
+  afterBuild?: (value: z.infer<S>) => z.infer<S>;
+}
+
+/**
+ * Per-call options for a `MockFactory`. Extends `MockOptions` with a `states`
+ * field that activates one or more named states for this call.
+ */
+export interface MockFactoryCallOptions<S extends z.ZodTypeAny = z.ZodTypeAny>
+  extends MockOptions<S> {
+  /**
+   * State name(s) to apply for this call. Multiple states are merged left-to-right;
+   * per-call `overrides` always win over state overrides.
+   *
+   * @example
+   * factory({ states: "admin" });
+   * factory({ states: ["admin", "verified"] });
+   */
+  states?: string | string[];
+}
+
 const DEFAULT_CONFIG: GlobalConfig = {
   maxDepth: 2,
   useDefaults: false,

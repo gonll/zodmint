@@ -93,7 +93,7 @@ One thing worth understanding: `mock()` captures an immutable snapshot of the gl
 
 ### `mockFactory(schema, options?)`
 
-Returns a reusable factory function. Useful when you need multiple instances of the same shape with per-call variation.
+Returns a reusable, typed factory. Useful when you need multiple instances of the same shape with per-call variation.
 
 ```typescript
 import { mockFactory } from "zodmint";
@@ -104,7 +104,7 @@ const user1 = createUser();
 const user2 = createUser({ overrides: { name: "Carol" } });
 ```
 
-Base options provided to `mockFactory` apply to every call. Per-call options are merged on top, with per-call values winning conflicts:
+Base options apply to every call. Per-call options merge on top, with per-call values winning:
 
 ```typescript
 const createActiveUser = mockFactory(UserSchema, {
@@ -114,6 +114,73 @@ const createActiveUser = mockFactory(UserSchema, {
 const user = createActiveUser({ overrides: { name: "Dave" } });
 // user.active === true (from base), user.name === "Dave" (from call)
 ```
+
+#### States
+
+States are named override presets that you can activate by name at call time. They sit between base overrides and per-call overrides in the merge priority:
+
+```typescript
+const userFactory = mockFactory(UserSchema, {
+  states: {
+    admin:    { role: "admin" },
+    guest:    { role: "guest" },
+    inactive: { active: false },
+  },
+});
+
+userFactory({ states: "admin" });
+// role === "admin"
+
+userFactory({ states: ["admin", "inactive"] });
+// role === "admin", active === false (states merged left-to-right)
+
+userFactory({ states: "admin", overrides: { role: "guest" } });
+// overrides win: role === "guest"
+```
+
+Merge priority (lowest → highest): `base overrides` → `state overrides` → `per-call overrides`.
+
+Requesting an unknown state throws `ZodForgeError [INVALID_OVERRIDE]` with the list of available states in the message.
+
+#### `afterBuild`
+
+A post-generation hook that runs after all overrides have been applied. Use it for derived fields, cross-field logic, or anything you can't express as a static override:
+
+```typescript
+const postFactory = mockFactory(PostSchema, {
+  afterBuild: (post) => ({
+    ...post,
+    slug: post.title.toLowerCase().replace(/\s+/g, "-"),
+  }),
+});
+
+const post = postFactory();
+// post.slug === post.title.toLowerCase().replace(/\s+/g, "-")
+```
+
+The hook receives the fully-generated, override-merged value and must return the same type.
+
+#### `factory.extend(options)`
+
+Derives a new factory from an existing one. Override merging, state inheritance, and `afterBuild` chaining are all handled automatically:
+
+```typescript
+const baseFactory  = mockFactory(UserSchema);
+const adminFactory = baseFactory.extend({ overrides: { role: "admin" } });
+const bannedAdminFactory = adminFactory.extend({ overrides: { active: false } });
+
+// role === "admin", active === false
+bannedAdminFactory();
+```
+
+Extend semantics:
+
+- `overrides` — deep-merged (extend wins on conflicts)
+- `states` — merged by key (extend adds new states or overrides existing ones by name)
+- `afterBuild` — chained (base hook runs first, then extend hook)
+- all other options (`seed`, `mode`, `maxDepth`, etc.) — extend wins
+
+The original factory is never mutated.
 
 ---
 
@@ -166,6 +233,23 @@ import { resetConfig } from "zodmint";
 
 afterEach(() => resetConfig());
 ```
+
+---
+
+### `withConfig(options, fn)`
+
+Preferred alternative to `configure()` + `resetConfig()` for test-scoped configuration. Applies options for the duration of the callback and restores the previous config afterwards — even if the callback throws.
+
+```typescript
+import { withConfig } from "zodmint";
+
+const result = withConfig({ maxDepth: 5, matchers: [...] }, () => {
+  return mock(schema);
+});
+// config is fully restored here
+```
+
+Use this instead of `configure()` when you only need the config change for a single test or block. It eliminates the `afterEach(() => resetConfig())` footgun.
 
 ---
 
@@ -555,3 +639,53 @@ The immediate v1 backlog is focused on a few remaining gaps:
 ---
 
 Zod v4 uses `new Function()` internally to compile schema validators. If your environment disables `unsafe-eval` (e.g. via CSP), stick with Zod v3.
+
+---
+
+## Integrations
+
+### MSW (Mock Service Worker)
+
+zodmint pairs well with [MSW](https://mswjs.io/) for generating realistic, schema-valid responses in both browser and Node test environments. Your frontend can develop and test against real-looking data without a running backend.
+
+```typescript
+import { http, HttpResponse } from "msw";
+import { mock, mockList } from "zodmint";
+import { UserSchema, PostSchema } from "./schemas";
+
+export const handlers = [
+  http.get("/api/users", () => {
+    return HttpResponse.json(mockList(UserSchema, { count: 10 }));
+  }),
+
+  http.get("/api/users/:id", () => {
+    return HttpResponse.json(mock(UserSchema));
+  }),
+
+  http.get("/api/posts", () => {
+    return HttpResponse.json(mockList(PostSchema, { count: 5 }));
+  }),
+];
+```
+
+Because zodmint guarantees `safeParse` validity, every response your MSW handler returns will satisfy the same schema your application uses to validate real API responses — no shape mismatches, no silent test passes that break in production.
+
+For stable responses across test runs, pass a `seed`:
+
+```typescript
+http.get("/api/users/:id", ({ params }) => {
+  return HttpResponse.json(mock(UserSchema, { seed: Number(params.id) }));
+}),
+```
+
+---
+
+## Prior art
+
+zodmint was built with an eye on the existing ecosystem. Three libraries were studied for orientation:
+
+- [**@anatine/zod-mock**](https://www.npmjs.com/package/@anatine/zod-mock) — the most widely used Zod mock library. It identified the core demand for schema-driven generation but relies on Faker.js, doesn't enforce constraints, and produces non-deterministic dates. zodmint was partly motivated by fixing those gaps.
+- [**zod-schema-faker**](https://www.npmjs.com/package/zod-schema-faker) — Faker.js + randexp.js, with seeding support. Inspired zodmint's seeded RNG approach, but still skips some constraints and requires an `install()` call before use.
+- [**interface-forge**](https://www.npmjs.com/package/interface-forge) — the most ergonomic factory API in the space. Its `states`, `afterBuild`, and `extend()` patterns directly inspired the same features in `mockFactory()`. zodmint borrows the factory ergonomics without the Faker.js dependency or bundle size cost.
+
+zodmint's goal is the best of all three: constraint fidelity from first principles, deterministic seeding, and a factory API that scales to real test suites.
