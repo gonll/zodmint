@@ -2,11 +2,34 @@ import { z } from "zod";
 import type { GenerationMode } from "./context.js";
 import type { DeepPartial } from "./merge.js";
 
+/**
+ * Context passed to `FieldMatcher.generate`. Provides the full schema path
+ * and the matched leaf key so matchers can produce path-aware values.
+ */
+export interface MatcherContext {
+  /** Full dot-separated path segments, e.g. ["user", "addresses", "*", "zipCode"] */
+  path: string[];
+  /** The matched leaf key (last non-"*" segment), e.g. "zipCode" */
+  leaf: string;
+}
+
 export interface FieldMatcher {
   /** Regex pattern tested against the leaf key of ctx.path */
   pattern: RegExp;
-  /** Generator function — receives no args, returns a value */
-  generate: () => unknown;
+  /**
+   * Generator function. Receives a `MatcherContext` with the full path and
+   * leaf key — use it to produce path-aware values.
+   *
+   * The context parameter is optional for backward compatibility: existing
+   * `generate: () => value` matchers continue to work unchanged.
+   *
+   * @example
+   * {
+   *   pattern: /zipCode/i,
+   *   generate: ({ path }) => path.includes("billing") ? "90210" : "10001",
+   * }
+   */
+  generate: (context?: MatcherContext) => unknown;
 }
 
 export interface GlobalConfig {
@@ -95,6 +118,49 @@ export interface MockFactoryCallOptions<S extends z.ZodTypeAny = z.ZodTypeAny>
   states?: string | string[];
 }
 
+/**
+ * A plugin bundles a set of matchers (and optionally other config defaults)
+ * into a reusable, distributable package. Install via `configure({ plugins })`.
+ *
+ * Plugin matchers are prepended to the global matchers list, so they take
+ * priority over the built-in semantic inference. Explicit `matchers` passed
+ * to `configure()` are prepended before plugin matchers and therefore win.
+ *
+ * @example
+ * // my-commerce-plugin.ts
+ * export const commercePlugin = definePlugin({
+ *   matchers: [
+ *     { pattern: /sku/i,      generate: () => `SKU-${Math.random().toString(36).slice(2,6).toUpperCase()}` },
+ *     { pattern: /currency/i, generate: () => "USD" },
+ *     { pattern: /taxRate/i,  generate: () => 0.08 },
+ *   ],
+ * });
+ *
+ * // in your test setup
+ * configure({ plugins: [commercePlugin] });
+ */
+export interface ZodmintPlugin {
+  /** Matchers contributed by this plugin. */
+  matchers: FieldMatcher[];
+}
+
+/**
+ * Creates a `ZodmintPlugin` from a plain options object.
+ * Use this to package and share domain-specific matchers.
+ */
+export function definePlugin(options: { matchers: FieldMatcher[] }): ZodmintPlugin {
+  return { matchers: options.matchers.map(m => ({ ...m })) };
+}
+
+/** Options accepted by `configure()` — extends `GlobalConfig` with a `plugins` array. */
+export interface ConfigureOptions extends Partial<GlobalConfig> {
+  /**
+   * Plugins to install. Each plugin's matchers are merged into the global
+   * matchers list after any explicitly provided `matchers`.
+   */
+  plugins?: ZodmintPlugin[];
+}
+
 const DEFAULT_CONFIG: GlobalConfig = {
   maxDepth: 2,
   useDefaults: false,
@@ -114,13 +180,17 @@ export function snapshotConfig(): Readonly<GlobalConfig> {
   };
 }
 
-export function configure(options: Partial<GlobalConfig>): void {
+export function configure(options: ConfigureOptions): void {
+  // Expand plugin matchers (plugins come after explicit matchers, so explicit win)
+  const pluginMatchers = (options.plugins ?? []).flatMap(p => p.matchers.map(m => ({ ...m })));
+  const explicitMatchers = options.matchers
+    ? options.matchers.map(m => ({ ...m }))
+    : globalConfig.matchers;
+
   globalConfig = {
     ...globalConfig,
     ...options,
-    matchers: options.matchers
-      ? options.matchers.map(m => ({ ...m }))
-      : globalConfig.matchers,
+    matchers: [...explicitMatchers, ...pluginMatchers],
   };
 }
 

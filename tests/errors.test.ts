@@ -78,15 +78,11 @@ describe("UNSUPPORTED_SCHEMA errors", () => {
     expect(typeof value).toBe("string");
   });
 
-  it("z.symbol() throws UNSUPPORTED_SCHEMA", () => {
+  it("z.symbol() generates a valid symbol", () => {
     const schema = z.symbol();
-    expect(() => mock(schema)).toThrow(ZodForgeError);
-    try {
-      mock(schema);
-    } catch (e) {
-      expect((e as ZodForgeError).code).toBe("UNSUPPORTED_SCHEMA");
-      expect((e as ZodForgeError).message).toMatch(/symbol/i);
-    }
+    const value = mock(schema);
+    expect(typeof value).toBe("symbol");
+    expect(schema.safeParse(value).success).toBe(true);
   });
 
   it("z.custom() throws UNSUPPORTED_SCHEMA with helpful message", () => {

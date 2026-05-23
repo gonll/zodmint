@@ -2,7 +2,7 @@ import { describe, it, expect, afterEach } from "vitest";
 import { z } from "zod";
 import { mock, mockList } from "../src/mock.js";
 import { ZodForgeError } from "../src/errors.js";
-import { resetConfig } from "../src/config.js";
+import { resetConfig, configure, definePlugin } from "../src/config.js";
 
 afterEach(() => resetConfig());
 
@@ -404,5 +404,160 @@ describe("refinementRetries option", () => {
     expect(() => mock(schema, { refinementRetries: 50, seed: 1 })).not.toThrow();
     const result = mock(schema, { refinementRetries: 50, seed: 1 });
     expect(result % 10).toBe(0);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// z.symbol() support
+// ---------------------------------------------------------------------------
+
+describe("z.symbol() support", () => {
+  it("generates a symbol", () => {
+    const schema = z.symbol();
+    const value = mock(schema);
+    expect(typeof value).toBe("symbol");
+  });
+
+  it("passes safeParse", () => {
+    const schema = z.symbol();
+    expect(schema.safeParse(mock(schema)).success).toBe(true);
+  });
+
+  it("generates a symbol inside an object", () => {
+    const schema = z.object({ key: z.symbol(), label: z.string() });
+    const value = mock(schema);
+    expect(typeof value.key).toBe("symbol");
+    expect(schema.safeParse(value).success).toBe(true);
+  });
+
+  it("symbol description contains path for debuggability", () => {
+    const schema = z.object({ tag: z.symbol() });
+    const value = mock(schema);
+    expect(value.tag.description).toContain("tag");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// MatcherContext (ctx.path in custom matchers)
+// ---------------------------------------------------------------------------
+
+describe("MatcherContext in custom matchers", () => {
+  afterEach(() => resetConfig());
+
+  it("receives the leaf key", () => {
+    const received: string[] = [];
+    configure({
+      matchers: [
+        {
+          pattern: /zip/i,
+          generate: (ctx) => { received.push(ctx!.leaf); return "90210"; },
+        },
+      ],
+    });
+    const schema = z.object({ zip: z.string() });
+    mock(schema);
+    expect(received[0]).toBe("zip");
+  });
+
+  it("receives the full path array", () => {
+    const paths: string[][] = [];
+    configure({
+      matchers: [
+        {
+          pattern: /zip/i,
+          generate: (ctx) => { paths.push(ctx!.path); return "10001"; },
+        },
+      ],
+    });
+    const schema = z.object({ address: z.object({ zip: z.string() }) });
+    mock(schema);
+    expect(paths[0]).toEqual(["address", "zip"]);
+  });
+
+  it("allows path-conditional generation", () => {
+    configure({
+      matchers: [
+        {
+          pattern: /zip/i,
+          generate: (ctx) =>
+            ctx?.path.includes("billing") ? "BILLING-ZIP" : "SHIPPING-ZIP",
+        },
+      ],
+    });
+    const schema = z.object({
+      billing:  z.object({ zip: z.string() }),
+      shipping: z.object({ zip: z.string() }),
+    });
+    const value = mock(schema);
+    expect(value.billing.zip).toBe("BILLING-ZIP");
+    expect(value.shipping.zip).toBe("SHIPPING-ZIP");
+  });
+
+  it("backward compatible — generate with no params still works", () => {
+    configure({
+      matchers: [{ pattern: /sku/i, generate: () => "SKU-1234" }],
+    });
+    const schema = z.object({ sku: z.string() });
+    expect(mock(schema).sku).toBe("SKU-1234");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Plugin system
+// ---------------------------------------------------------------------------
+
+describe("Plugin system", () => {
+  afterEach(() => resetConfig());
+
+  it("definePlugin creates a plugin from matchers", () => {
+    const plugin = definePlugin({
+      matchers: [{ pattern: /sku/i, generate: () => "SKU-TEST" }],
+    });
+    expect(plugin.matchers).toHaveLength(1);
+  });
+
+  it("plugin matchers are applied via configure()", () => {
+    const plugin = definePlugin({
+      matchers: [{ pattern: /currency/i, generate: () => "EUR" }],
+    });
+    configure({ plugins: [plugin] });
+    const schema = z.object({ currency: z.string() });
+    expect(mock(schema).currency).toBe("EUR");
+  });
+
+  it("multiple plugins are all applied", () => {
+    const pluginA = definePlugin({ matchers: [{ pattern: /sku/i, generate: () => "SKU-A" }] });
+    const pluginB = definePlugin({ matchers: [{ pattern: /currency/i, generate: () => "USD" }] });
+    configure({ plugins: [pluginA, pluginB] });
+    const schema = z.object({ sku: z.string(), currency: z.string() });
+    const value = mock(schema);
+    expect(value.sku).toBe("SKU-A");
+    expect(value.currency).toBe("USD");
+  });
+
+  it("explicit matchers take priority over plugin matchers", () => {
+    const plugin = definePlugin({ matchers: [{ pattern: /tag/i, generate: () => "from-plugin" }] });
+    configure({
+      matchers: [{ pattern: /tag/i, generate: () => "from-explicit" }],
+      plugins: [plugin],
+    });
+    const schema = z.object({ tag: z.string() });
+    expect(mock(schema).tag).toBe("from-explicit");
+  });
+
+  it("plugin does not mutate the original matchers array", () => {
+    const matchers = [{ pattern: /sku/i, generate: () => "SKU" }];
+    const plugin = definePlugin({ matchers });
+    matchers[0]!.generate = () => "MUTATED";
+    expect(plugin.matchers[0]!.generate()).toBe("SKU");
+  });
+
+  it("resetConfig() removes installed plugins", () => {
+    const plugin = definePlugin({ matchers: [{ pattern: /sku/i, generate: () => "SKU-X" }] });
+    configure({ plugins: [plugin] });
+    resetConfig();
+    const schema = z.object({ sku: z.string() });
+    // After reset, no matcher — sku gets generic string, not "SKU-X"
+    expect(mock(schema).sku).not.toBe("SKU-X");
   });
 });

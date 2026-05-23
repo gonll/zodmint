@@ -326,6 +326,57 @@ const product = mock(ProductSchema);
 
 Matchers are tested in order and the first match wins.
 
+### Path-aware matchers
+
+The `generate` function receives an optional `MatcherContext` with the full schema path and the matched leaf key. Use it to produce different values depending on where in the schema the field appears:
+
+```typescript
+import { configure, type MatcherContext } from "zodmint";
+
+configure({
+  matchers: [
+    {
+      pattern: /zip/i,
+      generate: ({ path }: MatcherContext) =>
+        path.includes("billing") ? "90210" : "10001",
+    },
+  ],
+});
+
+const order = mock(OrderSchema);
+// order.billing.zip  → "90210"
+// order.shipping.zip → "10001"
+```
+
+The `context` parameter is optional — existing `generate: () => value` matchers work unchanged.
+
+---
+
+## Plugins
+
+Plugins let you package and share domain-specific matchers as reusable bundles. Use `definePlugin()` to create one and install it via `configure({ plugins })`.
+
+```typescript
+import { definePlugin, configure } from "zodmint";
+
+export const commercePlugin = definePlugin({
+  matchers: [
+    { pattern: /sku/i,      generate: () => `SKU-${Math.random().toString(36).slice(2, 6).toUpperCase()}` },
+    { pattern: /currency/i, generate: () => "USD" },
+    { pattern: /taxRate/i,  generate: () => 0.08 },
+    { pattern: /barcode/i,  generate: () => `0${Math.floor(Math.random() * 1e12)}` },
+  ],
+});
+```
+
+In your test setup file:
+
+```typescript
+configure({ plugins: [commercePlugin] });
+```
+
+Priority order (highest → lowest): explicit `matchers` → plugin matchers → built-in semantic inference. Multiple plugins are applied in array order; earlier plugins win on conflicts.
+
 ---
 
 ## Constraints

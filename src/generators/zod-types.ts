@@ -281,11 +281,11 @@ function dispatch(
         "UNSUPPORTED_SCHEMA",
       );
 
-    case "symbol":
-      throw new ZodForgeError(
-        `z.symbol() is not supported in v1 at ${formatPath(ctx.path)}.`,
-        "UNSUPPORTED_SCHEMA",
-      );
+    case "symbol": {
+      // Generate a symbol with a seeded label for debuggability
+      const label = `zodmint-${ctx.path.join(".") || "root"}-${ctx.rng.nextInt(0, 9999)}`;
+      return Symbol(label);
+    }
 
     case "function":
       throw new ZodForgeError(
@@ -320,7 +320,7 @@ function dispatchString(
 
   // Check custom matchers first (against description or leaf) — only in realistic mode
   if (ctx.mode === "realistic") {
-    const custom = applyCustomMatchers(semanticHint, config.matchers);
+    const custom = applyCustomMatchers(semanticHint, config.matchers, ctx.path);
     if (custom !== undefined) return String(custom);
   }
 
@@ -454,7 +454,7 @@ function dispatchNumber(
   const semanticHint = getDescription(schema) ?? leaf;
   // Only apply custom matchers and semantic inference in realistic mode
   if (ctx.mode === "realistic") {
-    const custom = applyCustomMatchers(semanticHint, config.matchers);
+    const custom = applyCustomMatchers(semanticHint, config.matchers, ctx.path);
     if (custom !== undefined) return Number(custom);
   }
 
