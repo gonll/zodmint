@@ -1,6 +1,6 @@
 {
   "name": "zodmint",
-  "version": "1.6.1",
+  "version": "1.7.0",
   "description": "TypeScript-first schema-valid test fixture generator for Zod schemas",
   "type": "module",
   "main": "./dist/index.cjs",
@@ -53,5 +53,17 @@
     "schema",
     "generator"
   ],
-  "license": "MIT"
+  "license": "MIT",
+  "author": {
+    "name": "Gonzalo",
+    "url": "https://github.com/gonll"
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/gonll/zodmint.git"
+  },
+  "homepage": "https://github.com/gonll/zodmint#readme",
+  "bugs": {
+    "url": "https://github.com/gonll/zodmint/issues"
+  }
 }

@@ -29,6 +29,9 @@ Thumbs.db
 # Test coverage
 coverage/
 
+# Local playground
+playground/
+
 # Temp
 *.tmp
 *.temp
