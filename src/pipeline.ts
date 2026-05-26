@@ -49,11 +49,15 @@ export function schemaHasTransform(schema: z.ZodTypeAny): boolean {
  *
  * Steps:
  * 1. Config snapshot is captured by the caller before entering the pipeline.
- * 2. Generate input-domain value via dispatch.
- * 3. Run schema.safeParse() exactly once → output domain.
- * 4. Apply deep-partial overrides (if schema has no transforms).
- * 5. Validate final output; throw INVALID_OVERRIDE if it fails.
+ * 2. Generate input-domain value via dispatch (for transform schemas, this is
+ *    the pre-transform value because dispatch extracts the inner input schema).
+ * 3. Apply deep-partial overrides via deepMerge into the input-domain value.
+ * 4. Run schema.safeParse() exactly once → output domain (executes transforms).
+ * 5. Validate output; throw INVALID_OVERRIDE if present and safeParse fails,
+ *    or GENERATION_FAILED for internal generation bugs.
  * 6. Return typed output.
+ *
+ * Steps 1–3 operate in the input domain. Steps 4–6 in the output domain.
  */
 export function runPipeline<S extends z.ZodTypeAny>(
   schema: S,
@@ -71,17 +75,16 @@ export function runPipeline<S extends z.ZodTypeAny>(
     return generated as z.infer<S>;
   }
 
-  // Guard: overrides on transform schemas are unsupported in v1
-  if (overrides !== undefined && schemaHasTransform(schema)) {
-    throw new ZodForgeError(
-      `Overrides are not supported on schemas containing .transform() in v1. ` +
-        `The transform/output domain cannot be safely merged. ` +
-        `Apply overrides to the schema's input type, or use a non-transform schema.`,
-      "UNSUPPORTED_SCHEMA",
-    );
-  }
-
-  // Step 2: Generate input-domain value
+  // Step 2: Generate input-domain value.
+  // For transform schemas, dispatch() already generates from the INPUT schema (pre-transform),
+  // so `generated` is the input-domain value. Overrides are merged into this input-domain
+  // value before safeParse, which then runs the transform exactly once.
+  //
+  // Consequence: overrides target the INPUT domain for transform schemas, not the output.
+  // For object transforms (the common case) the input and output shapes are usually the same
+  // or the output is a superset, so input-domain overrides feel natural. For type-changing
+  // transforms (e.g. z.string().transform(s => parseInt(s))), overrides must be compatible
+  // with the input type or safeParse will throw INVALID_OVERRIDE.
   const generated = dispatch(schema, ctx, config, null);
 
   // Special case: z.promise() schemas wrap a Promise. Zod v4's synchronous safeParse

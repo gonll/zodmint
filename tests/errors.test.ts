@@ -49,20 +49,16 @@ describe("UNSUPPORTED_SCHEMA errors", () => {
     }
   });
 
-  it("z.preprocess() with non-primitive output throws UNSUPPORTED_SCHEMA", () => {
-    // preprocess with a complex (non-primitive) output type is still unsupported
+  it("z.preprocess() with non-primitive output now works (generates from output schema)", () => {
+    // preprocess with a complex output type now generates from the output schema directly
     const schema = z.preprocess((v) => v, z.object({ x: z.string() }));
-    expect(() => mock(schema)).toThrow(ZodForgeError);
-    try {
-      mock(schema);
-    } catch (e) {
-      expect((e as ZodForgeError).code).toBe("UNSUPPORTED_SCHEMA");
-      expect((e as ZodForgeError).message).toMatch(/preprocess/i);
-    }
+    expect(() => mock(schema)).not.toThrow();
+    const result = mock(schema);
+    expect(typeof result.x).toBe("string");
   });
 
-  it("z.preprocess() with primitive output (z.coerce-like) works", () => {
-    // preprocess wrapping a primitive output behaves like z.coerce — we generate the output type
+  it("z.preprocess() with primitive output (z.coerce-like) still works", () => {
+    // preprocess wrapping a primitive output behaves like z.coerce
     const schema = z.preprocess((v) => String(v), z.string());
     expect(() => mock(schema)).not.toThrow();
     const result = mock(schema);
@@ -90,16 +86,8 @@ describe("UNSUPPORTED_SCHEMA errors", () => {
   // z.refine() no longer throws UNSUPPORTED_SCHEMA — it uses generate-and-test.
   // Unsatisfiable refinements throw GENERATION_FAILED (tested in GENERATION_FAILED block).
 
-  it("overrides on transform schema throws UNSUPPORTED_SCHEMA with explanation", () => {
-    const schema = z.string().transform((s) => s.length);
-    expect(() => mock(schema, { overrides: {} })).toThrow(ZodForgeError);
-    try {
-      mock(schema, { overrides: {} });
-    } catch (e) {
-      expect((e as ZodForgeError).code).toBe("UNSUPPORTED_SCHEMA");
-      expect((e as ZodForgeError).message).toMatch(/transform/i);
-    }
-  });
+  // Overrides on transform schemas are now supported — tested in pipeline.test.ts
+  // under "transforms on overrides".
 });
 
 describe("z.custom()", () => {

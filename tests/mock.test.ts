@@ -132,13 +132,16 @@ describe("mock()", () => {
     expect(typeof result.name).toBe("string");
   });
 
-  it("overrides on transform schema throws UNSUPPORTED_SCHEMA", () => {
+  it("overrides on transform schema apply to input domain (no longer throws)", () => {
+    // Overrides are now applied to the pre-transform input domain.
+    // An incompatible override (object on a string-transform input) throws INVALID_OVERRIDE,
+    // not UNSUPPORTED_SCHEMA — the error shifts from "not supported" to "bad value".
     const schema = z.string().transform((s) => s.toUpperCase());
     expect(() => mock(schema, { overrides: {} })).toThrow(ZodForgeError);
     try {
       mock(schema, { overrides: {} });
     } catch (e) {
-      expect((e as ZodForgeError).code).toBe("UNSUPPORTED_SCHEMA");
+      expect((e as ZodForgeError).code).toBe("INVALID_OVERRIDE");
     }
   });
 

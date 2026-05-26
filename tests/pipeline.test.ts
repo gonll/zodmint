@@ -175,6 +175,88 @@ describe("transforms", () => {
   });
 });
 
+describe("transforms on overrides", () => {
+  it("object transform: overrides applied to input domain before transform runs", () => {
+    // The transform adds an `id` field. Overrides target input fields (name, age).
+    // The transform runs after the merge, so the output always has both fields + id.
+    const schema = z.object({ name: z.string(), age: z.number().int().positive() })
+      .transform((o) => ({ ...o, active: true }));
+
+    const result = mock(schema, { overrides: { name: "Alice" } });
+    expect(result.name).toBe("Alice");
+    expect(typeof result.age).toBe("number");
+    expect(result.active).toBe(true);
+  });
+
+  it("string-to-string transform: override applied before transform", () => {
+    // transform uppercases; override sets the pre-transform input to "hello"
+    const schema = z.string().transform((s) => s.toUpperCase());
+    const result = mock(schema, { overrides: "hello" as unknown as string });
+    expect(result).toBe("HELLO");
+  });
+
+  it("nested object transform: deep overrides work on input fields", () => {
+    const schema = z.object({
+      user: z.object({ name: z.string(), email: z.string().email() }),
+      count: z.number().int(),
+    }).transform((o) => ({ ...o, _generated: true }));
+
+    const result = mock(schema, { overrides: { user: { name: "Bob" } } });
+    expect(result.user.name).toBe("Bob");
+    expect(typeof result.user.email).toBe("string");
+    expect(result._generated).toBe(true);
+  });
+
+  it("transform without overrides still works", () => {
+    const schema = z.object({ x: z.number() }).transform((o) => ({ ...o, doubled: o.x * 2 }));
+    const result = mock(schema);
+    expect(typeof result.x).toBe("number");
+    expect(result.doubled).toBe(result.x * 2);
+  });
+
+  it("invalid override on transform schema throws INVALID_OVERRIDE", () => {
+    // Providing a value that fails the input schema should throw INVALID_OVERRIDE.
+    // The transform input is z.object({ x: z.number() }); passing x as a string fails.
+    const schema = z.object({ x: z.number().positive() }).transform((o) => o);
+    expect(() => mock(schema, { overrides: { x: -999 } })).toThrow(ZodForgeError);
+    try {
+      mock(schema, { overrides: { x: -999 } });
+    } catch (e) {
+      expect((e as ZodForgeError).code).toBe("INVALID_OVERRIDE");
+    }
+  });
+});
+
+describe("z.preprocess() with non-primitive output", () => {
+  it("preprocess wrapping an object schema generates from the output object", () => {
+    const schema = z.preprocess((v) => v, z.object({ name: z.string(), age: z.number() }));
+    expect(() => mock(schema)).not.toThrow();
+    const result = mock(schema);
+    expect(typeof result.name).toBe("string");
+    expect(typeof result.age).toBe("number");
+  });
+
+  it("preprocess wrapping an array schema generates from the output array", () => {
+    const schema = z.preprocess((v) => v, z.array(z.string()));
+    expect(() => mock(schema)).not.toThrow();
+    const result = mock(schema);
+    expect(Array.isArray(result)).toBe(true);
+    result.forEach((item) => expect(typeof item).toBe("string"));
+  });
+
+  it("preprocess with transformation generates valid output-schema values", () => {
+    // The preprocess function parses a string → the output schema validates as an object.
+    // Generation ignores the preprocess fn and generates from the output schema directly.
+    const schema = z.preprocess(
+      (v) => (typeof v === "string" ? JSON.parse(v as string) : v),
+      z.object({ id: z.number(), label: z.string() }),
+    );
+    const result = mock(schema);
+    expect(typeof result.id).toBe("number");
+    expect(typeof result.label).toBe("string");
+  });
+});
+
 describe("z.lazy() and recursion", () => {
   it("optional lazy terminates at maxDepth with undefined", () => {
     // The lazy resolves to z.optional(...) so dispatchLazy returns undefined

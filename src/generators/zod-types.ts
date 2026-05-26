@@ -219,18 +219,11 @@ function dispatch(
       // v3 ZodEffects
       const { effectType, innerSchema } = getEffectsInfo(schema);
       if (effectType === "preprocess") {
-        // z.coerce.* in v3 uses preprocess. If the output is a primitive type, generate from it.
-        const outType = typeName(innerSchema);
-        const coercePrimitives = ["string", "number", "boolean", "bigint", "date"];
-        if (coercePrimitives.includes(outType)) {
-          return dispatch(innerSchema, ctx, config, leaf);
-        }
-        throw new ZodForgeError(
-          `z.preprocess() with non-primitive output is not supported at ${formatPath(ctx.path)}. ` +
-            `To work around this, use a path-based generator: ` +
-            `generators: { "${ctx.path.join(".")}" : () => yourValidValue }`,
-          "UNSUPPORTED_SCHEMA",
-        );
+        // z.preprocess(fn, outputSchema) — generate from the output schema directly.
+        // This covers z.coerce.* (primitive output) and arbitrary complex output schemas
+        // (object, array, etc.). The preprocess function is not called during generation;
+        // safeParse applies it when the root pipeline calls it on the final value.
+        return dispatch(innerSchema, ctx, config, leaf);
       }
       // refinement is handled before the switch by the isV3Refinement() guard above.
       // If we somehow reach here with a refinement, fall through to transform handling.
@@ -256,20 +249,11 @@ function dispatch(
       // v4: distinguish preprocess/coerce (input is a transform) from .transform() (output is transform)
       const pipeInput = getPipeInputSchema(schema);
       if (typeName(pipeInput) === "transform") {
-        // Could be z.coerce.* — if output is a primitive type, generate from output directly.
-        // The coerce transform (String, Number, Boolean, …) is a no-op on the correct native type.
+        // z.preprocess(fn, outputSchema) or z.coerce.* — generate from the output schema directly.
+        // Works for both primitive outputs (coerce path) and complex outputs (object, array, etc.).
+        // The preprocess/coerce transform function is applied by safeParse, not during generation.
         const pipeOut = getPipeOutputSchema(schema);
-        const outType = typeName(pipeOut);
-        const coercePrimitives = ["string", "number", "boolean", "bigint", "date"];
-        if (coercePrimitives.includes(outType)) {
-          return dispatch(pipeOut, ctx, config, leaf);
-        }
-        throw new ZodForgeError(
-          `z.preprocess() with non-primitive output is not supported at ${formatPath(ctx.path)}. ` +
-            `To work around this, use a path-based generator: ` +
-            `generators: { "${ctx.path.join(".")}" : () => yourValidValue }`,
-          "UNSUPPORTED_SCHEMA",
-        );
+        return dispatch(pipeOut, ctx, config, leaf);
       }
       // .transform() — generate from input schema; transform runs via safeParse
       return dispatch(pipeInput, ctx, config, leaf);

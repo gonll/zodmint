@@ -4,6 +4,17 @@ All notable changes to zodmint are documented here. This project follows [Keep a
 
 ---
 
+## [1.9.0] - 2026-05-25
+
+### Added
+- **Overrides on transform schemas** — `mock(schema, { overrides })` now works when the schema contains `.transform()`. Overrides are applied to the pre-transform input value; `safeParse` then runs the transform exactly once. The most common case (object transform adding computed fields) works intuitively. Type-changing transforms (e.g. `z.string().transform(s => parseInt(s))`) throw `INVALID_OVERRIDE` if the override is incompatible with the input type. Previously threw `UNSUPPORTED_SCHEMA`.
+- **`z.preprocess()` with non-primitive output** — `z.preprocess(fn, z.object({...}))` and similar schemas with complex output types (object, array, union, etc.) now generate valid values from the output schema directly. Previously threw `UNSUPPORTED_SCHEMA`.
+
+### Changed
+- Error semantics: passing an incompatible override to a transform schema now throws `INVALID_OVERRIDE` (not `UNSUPPORTED_SCHEMA`).
+
+---
+
 ## [1.8.1] - 2026-05-25
 
 ### Fixed
