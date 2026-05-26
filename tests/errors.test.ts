@@ -85,15 +85,7 @@ describe("UNSUPPORTED_SCHEMA errors", () => {
     expect(schema.safeParse(value).success).toBe(true);
   });
 
-  it("z.custom() throws UNSUPPORTED_SCHEMA with helpful message", () => {
-    const schema = z.custom<string>(v => typeof v === "string");
-    expect(() => mock(schema)).toThrow(ZodForgeError);
-    try { mock(schema); } catch (e) {
-      expect((e as ZodForgeError).code).toBe("UNSUPPORTED_SCHEMA");
-      expect((e as ZodForgeError).message).toContain("z.custom()");
-      expect((e as ZodForgeError).message).toContain("path-based generator");
-    }
-  });
+  // z.custom() previously threw UNSUPPORTED_SCHEMA; it now generates a random primitive.
 
   // z.refine() no longer throws UNSUPPORTED_SCHEMA — it uses generate-and-test.
   // Unsatisfiable refinements throw GENERATION_FAILED (tested in GENERATION_FAILED block).
@@ -107,6 +99,18 @@ describe("UNSUPPORTED_SCHEMA errors", () => {
       expect((e as ZodForgeError).code).toBe("UNSUPPORTED_SCHEMA");
       expect((e as ZodForgeError).message).toMatch(/transform/i);
     }
+  });
+});
+
+describe("z.custom()", () => {
+  it("does not throw - generates a random primitive", () => {
+    expect(() => mock(z.custom<string>(() => true))).not.toThrow();
+  });
+
+  it("generated value is a string, number, or boolean", () => {
+    const result = mock(z.custom<unknown>(() => true));
+    const validTypes = ["string", "number", "boolean"];
+    expect(validTypes).toContain(typeof result);
   });
 });
 

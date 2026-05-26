@@ -1,6 +1,6 @@
 {
   "name": "zodmint",
-  "version": "1.7.0",
+  "version": "1.8.0",
   "description": "TypeScript-first schema-valid test fixture generator for Zod schemas",
   "type": "module",
   "main": "./dist/index.cjs",
@@ -16,6 +16,11 @@
       "types": "./dist/testing.d.ts",
       "import": "./dist/testing.js",
       "require": "./dist/testing.cjs"
+    },
+    "./fast-check": {
+      "types": "./dist/fast-check.d.ts",
+      "import": "./dist/fast-check.js",
+      "require": "./dist/fast-check.cjs"
     }
   },
   "files": [
@@ -28,16 +33,21 @@
     "node": ">=18"
   },
   "scripts": {
+    "clean": "rm -f ./*.mjs",
+    "prebuild": "npm run clean",
     "build": "tsup",
+    "pretest": "npm run clean",
     "test": "vitest run",
     "test:watch": "vitest",
     "lint": "tsc --noEmit"
   },
   "peerDependencies": {
-    "zod": ">=3.23.0"
+    "zod": ">=3.23.0",
+    "fast-check": ">=3.0.0"
   },
   "devDependencies": {
     "@types/node": "^20.0.0",
+    "fast-check": "^3.22.0",
     "tsup": "^8.0.0",
     "typescript": "^5.4.0",
     "vitest": "^1.6.0",
@@ -51,7 +61,15 @@
     "testing",
     "typescript",
     "schema",
-    "generator"
+    "generator",
+    "test-data",
+    "mock-data",
+    "fixtures",
+    "zod-mock",
+    "zod-faker",
+    "test-fixtures",
+    "fake-data",
+    "data-generator"
   ],
   "license": "MIT",
   "author": {

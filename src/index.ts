@@ -16,3 +16,5 @@ export type {
 export { ZodForgeError } from "./errors.js";
 export type { ZodForgeErrorCode } from "./errors.js";
 export type { GenerationMode } from "./context.js";
+export { createSession, seq } from "./session.js";
+export type { Session } from "./session.js";

@@ -4,6 +4,42 @@ All notable changes to zodmint are documented here. This project follows [Keep a
 
 ---
 
+## [1.8.0] - 2026-05-25
+
+### Added
+- Session/scope threading (`createSession()`, `session` option on `mock()`) - threads mutable state through generators and matchers across multiple `mock()` calls. Accessible via `MatcherContext.session`.
+- `seq(key, session?)` - incrementing integer sequence per key, backed by the session. Starts at 1, independent per key.
+- fast-check integration (`zodmint/fast-check`, `arb(schema)`) - converts any Zod schema to a real `fc.Arbitrary` with proper shrinking. Maps each Zod type to native fast-check primitives. Requires `fast-check >= 3.0.0` as a peer dependency.
+- Violation testing (`violate` option on `mock()`) - `mock(schema, { violate: ["email", "age"] })` generates intentionally invalid values at specified paths for testing validation error handling. Non-violated fields remain valid.
+
+### Changed
+- `z.custom()` no longer throws `UNSUPPORTED_SCHEMA` - now generates a random primitive (string, number, or boolean) as best-effort. Use a path-based generator for a specific valid value.
+
+### Fixed
+- `z.preprocess()` with non-primitive output now emits an actionable error message including the path-based generator workaround.
+
+---
+
+## [1.7.0] - 2026-05-24
+
+### Added
+- examples/ directory with practical usage examples covering mock(), mockFactory(), states, plugins, and MSW integration
+
+### Fixed
+- Removed null byte from package.json
+- Added sideEffects: false field (already in 1.5.2 entry, but this was the original fix commit)
+
+---
+
+## [1.6.0] - 2026-05-22
+
+### Added
+- z.symbol() support - generates a Symbol with a seeded label derived from the path for debuggability
+- Plugin system (definePlugin(), configure({ plugins })) - bundles field matchers into reusable distributable packages. Plugin matchers have lower priority than explicit matchers but higher than built-in semantic inference.
+- MatcherContext parameter on FieldMatcher.generate - matchers now receive { path, leaf } for path-aware value generation. Backward compatible: existing generate: () => value matchers continue to work unchanged.
+
+---
+
 ## [1.5.2] — 2026-05-22
 
 ### Fixed

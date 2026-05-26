@@ -1,5 +1,6 @@
 import { z } from "zod";
 import { ZodForgeError, formatPath } from "../errors.js";
+import { generateViolation } from "../violate.js";
 import {
   type GenerationContext,
   childCtx,
@@ -89,6 +90,14 @@ function dispatch(
         );
       }
       return check.data;
+    }
+  }
+
+  // Violate check: if this path is in the violate set, generate an invalid value
+  if (ctx.violatePaths.size > 0) {
+    const pathKey = ctx.path.join(".");
+    if (ctx.violatePaths.has(pathKey)) {
+      return generateViolation(schema);
     }
   }
 
@@ -221,7 +230,9 @@ function dispatch(
           return dispatch(innerSchema, ctx, config, leaf);
         }
         throw new ZodForgeError(
-          `z.preprocess() is not supported in v1 at ${formatPath(ctx.path)}.`,
+          `z.preprocess() with non-primitive output is not supported at ${formatPath(ctx.path)}. ` +
+            `To work around this, use a path-based generator: ` +
+            `generators: { "${ctx.path.join(".")}" : () => yourValidValue }`,
           "UNSUPPORTED_SCHEMA",
         );
       }
@@ -258,7 +269,9 @@ function dispatch(
           return dispatch(pipeOut, ctx, config, leaf);
         }
         throw new ZodForgeError(
-          `z.preprocess() is not supported in v1 at ${formatPath(ctx.path)}.`,
+          `z.preprocess() with non-primitive output is not supported at ${formatPath(ctx.path)}. ` +
+            `To work around this, use a path-based generator: ` +
+            `generators: { "${ctx.path.join(".")}" : () => yourValidValue }`,
           "UNSUPPORTED_SCHEMA",
         );
       }
@@ -273,13 +286,16 @@ function dispatch(
     }
 
     case "custom":
-      // z.custom<T>() — we cannot generate against an arbitrary user-supplied predicate.
-      // Use a path-based generator override to supply a valid value directly.
-      throw new ZodForgeError(
-        `z.custom() at ${formatPath(ctx.path)} is not supported. Use a path-based generator instead: ` +
-          `generators: { "${ctx.path.join(".")}" : () => yourValue }`,
-        "UNSUPPORTED_SCHEMA",
-      );
+      // z.custom<T>() carries a user-defined type predicate that cannot be introspected.
+      // Generate a random primitive as best-effort. The predicate may reject it, in which
+      // case safeParse will fail at the pipeline level. Use a path-based generator override
+      // to supply a valid value directly:
+      //   generators: { "myField": () => yourValidValue }
+      return ctx.rng.pick([
+        ctx.rng.next().toString(36),
+        ctx.rng.nextInt(-1000, 1000),
+        ctx.rng.bool(),
+      ]);
 
     case "symbol": {
       // Generate a symbol with a seeded label for debuggability
@@ -320,7 +336,7 @@ function dispatchString(
 
   // Check custom matchers first (against description or leaf) — only in realistic mode
   if (ctx.mode === "realistic") {
-    const custom = applyCustomMatchers(semanticHint, config.matchers, ctx.path);
+    const custom = applyCustomMatchers(semanticHint, config.matchers, ctx.path, ctx.session);
     if (custom !== undefined) return String(custom);
   }
 
@@ -454,7 +470,7 @@ function dispatchNumber(
   const semanticHint = getDescription(schema) ?? leaf;
   // Only apply custom matchers and semantic inference in realistic mode
   if (ctx.mode === "realistic") {
-    const custom = applyCustomMatchers(semanticHint, config.matchers, ctx.path);
+    const custom = applyCustomMatchers(semanticHint, config.matchers, ctx.path, ctx.session);
     if (custom !== undefined) return Number(custom);
   }
 

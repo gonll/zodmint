@@ -1,6 +1,7 @@
 import { z } from "zod";
 import type { GenerationMode } from "./context.js";
 import type { DeepPartial } from "./merge.js";
+import type { Session } from "./session.js";
 
 /**
  * Context passed to `FieldMatcher.generate`. Provides the full schema path
@@ -11,6 +12,8 @@ export interface MatcherContext {
   path: string[];
   /** The matched leaf key (last non-"*" segment), e.g. "zipCode" */
   leaf: string;
+  /** Session for cross-call coordination. Only present when a session is passed to mock(). */
+  session?: Session;
 }
 
 export interface FieldMatcher {
@@ -65,6 +68,19 @@ export interface MockOptions<S extends z.ZodTypeAny = z.ZodTypeAny> {
    * Defaults to globalConfig.refinementRetries (default: 10).
    */
   refinementRetries?: number;
+  /** Session to thread shared state across calls and into matchers */
+  session?: Session;
+  /**
+   * Paths of fields to intentionally violate. Values at these paths will
+   * deliberately fail schema validation, useful for testing error handling.
+   *
+   * @example
+   * mock(UserSchema, { violate: ["email", "age"] })
+   * // result.email is not a valid email
+   * // result.age is not a valid age value
+   * // all other fields are valid
+   */
+  violate?: string[];
 }
 
 /**

@@ -1,3 +1,5 @@
+import type { Session } from "./session.js";
+
 export type GenerationMode = "realistic" | "edge" | "random";
 
 export interface SeededRNG {
@@ -29,6 +31,10 @@ export interface GenerationContext {
   generators: Record<string, () => unknown>;
   /** Maximum number of generate-and-test attempts for z.refine() / z.superRefine() schemas */
   refinementRetries: number;
+  /** Optional session for coordinating state across calls and into matchers */
+  session?: Session;
+  /** Paths to intentionally violate. When the current path matches, generateViolation() is used. */
+  violatePaths: Set<string>;
 }
 
 /** mulberry32 seeded PRNG */

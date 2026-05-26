@@ -58,6 +58,14 @@ export function runPipeline<S extends z.ZodTypeAny>(
 ): z.infer<S> {
   const overrides = options?.overrides;
 
+  // When violating, skip safeParse entirely - we intentionally produce invalid values
+  // at specific paths. Normal dispatch handles violation per-path; the final result
+  // is not expected to pass schema validation.
+  if (options?.violate && options.violate.length > 0) {
+    const generated = dispatch(schema, ctx, config, null);
+    return generated as z.infer<S>;
+  }
+
   // Guard: overrides on transform schemas are unsupported in v1
   if (overrides !== undefined && schemaHasTransform(schema)) {
     throw new ZodForgeError(

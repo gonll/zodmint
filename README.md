@@ -3,6 +3,8 @@
 [![CI](https://github.com/gonll/zodmint/actions/workflows/ci.yml/badge.svg)](https://github.com/gonll/zodmint/actions/workflows/ci.yml)
 [![npm](https://img.shields.io/npm/v/zodmint)](https://www.npmjs.com/package/zodmint)
 [![npm downloads](https://img.shields.io/npm/dm/zodmint)](https://www.npmjs.com/package/zodmint)
+[![bundle size](https://img.shields.io/bundlephobia/minzip/zodmint)](https://bundlephobia.com/package/zodmint)
+[![license](https://img.shields.io/npm/l/zodmint)](https://github.com/gonll/zodmint/blob/main/LICENSE)
 
 Your faker mocks are lying to your tests.
 With Zodmint, your schema is your mock's source of truth.
@@ -570,6 +572,76 @@ const users = mockList(UserSchema, {
 
 ---
 
+## Session
+
+A session threads shared mutable state through multiple `mock()` calls and into matchers — useful for generating relational fixtures where IDs need to be unique and consistent across objects.
+
+```typescript
+import { createSession, seq } from "zodmint";
+
+const session = createSession();
+```
+
+Pass the session to `mock()` and it flows into every matcher's `MatcherContext`:
+
+```typescript
+import { configure } from "zodmint";
+import type { MatcherContext } from "zodmint";
+
+configure({
+  matchers: [
+    {
+      pattern: /userId/i,
+      generate: ({ session }: MatcherContext) => seq("user", session),
+    },
+  ],
+});
+
+const session = createSession();
+const user1 = mock(UserSchema, { session }); // user1.userId === 1
+const user2 = mock(UserSchema, { session }); // user2.userId === 2
+```
+
+### `createSession()`
+
+Returns a new empty session with two maps:
+
+- `session.store` — a `Map<string, unknown>` for arbitrary shared data. Generators and matchers can read and write to coordinate state across calls.
+- `session.sequences` — internal map used by `seq()`. You rarely touch this directly.
+
+### `seq(key, session?)`
+
+Returns the next integer for the given key within the session. Starts at 1. Different keys are independent. If no session is passed, always returns 1.
+
+```typescript
+const session = createSession();
+seq("orderId", session) // 1
+seq("orderId", session) // 2
+seq("userId", session)  // 1 (different key, independent counter)
+```
+
+Using `seq()` inside a matcher ensures each generated fixture gets a unique, predictable identifier — without UUID collisions or database uniqueness errors.
+
+### `session.store` for cross-call coordination
+
+```typescript
+configure({
+  matchers: [
+    {
+      pattern: /referralCode/i,
+      generate: ({ session }: MatcherContext) => {
+        if (!session) return "REF-0000";
+        const code = `REF-${seq("ref", session).toString().padStart(4, "0")}`;
+        session.store.set("lastReferral", code);
+        return code;
+      },
+    },
+  ],
+});
+```
+
+---
+
 ## Overrides and Deep Merge
 
 Overrides use a deep partial merge. Plain objects are merged recursively. Arrays replace — they are never concatenated. Scalars replace. Setting a key to `undefined` in overrides is a no-op (the generated value is kept).
@@ -585,6 +657,31 @@ const result = mock(UserSchema, {
 ```
 
 Overrides are not supported on schemas containing `.transform()`. The output of a transform is in a different domain than the input, so merging into it safely isn't possible in v1. Attempting it throws `ZodForgeError [UNSUPPORTED_SCHEMA]` with a clear explanation.
+
+---
+
+## Violation Testing
+
+Pass `violate` to intentionally generate invalid values at specific field paths. All other fields are generated normally. The result will fail `schema.safeParse()` at the violated paths — useful for testing validation error handling.
+
+```typescript
+const schema = z.object({
+  email: z.string().email(),
+  age: z.number().int().min(18),
+  name: z.string(),
+});
+
+const bad = mock(schema, { violate: ["email", "age"] });
+// bad.email → "not-an-email" (fails .email() format)
+// bad.age   → 1.5 (fails .int()) or 17 (fails .min(18))
+// bad.name  → valid string (untouched)
+
+schema.safeParse(bad).success; // false
+```
+
+Violation strategies are constraint-aware. An `.email()` field gets a string without `@`. A `.positive()` number gets `-1`. A `.min(5)` string gets a string shorter than 5 characters. A `boolean` gets `"not-a-boolean"`. When no constraints are present, the wrong type is returned (e.g., a number for a plain string field).
+
+`violate` and `overrides` may not target the same path — doing so throws `ZodForgeError [INVALID_OVERRIDE]`.
 
 ---
 
@@ -616,7 +713,11 @@ zodmint handles the full Zod type system with a few noted exceptions.
 
 `z.unknown()` and `z.any()` produce a random primitive (string, number, or boolean). `z.nan()` returns `NaN` — see the warning below. `z.void()` returns `undefined`.
 
-`z.string().transform(...)` is supported; the transform runs once via `safeParse`. `z.promise(T)` is supported — it generates `Promise.resolve(value)` where `value` is generated from the inner schema `T`. `z.object({}).catchall(T)` generates all declared fields plus 1–3 additional key-value pairs whose values conform to `T`. `z.refine()` and `z.superRefine()` are supported via generate-and-test, retrying up to `refinementRetries` times (default: 10) before throwing `GENERATION_FAILED`. `z.preprocess()` with a non-primitive output, `z.pipe()` (v3), `z.symbol()`, `z.never()`, and `z.custom()` throw `UNSUPPORTED_SCHEMA`.
+`z.string().transform(...)` is supported; the transform runs once via `safeParse`. `z.promise(T)` is supported — it generates `Promise.resolve(value)` where `value` is generated from the inner schema `T`. `z.object({}).catchall(T)` generates all declared fields plus 1–3 additional key-value pairs whose values conform to `T`. `z.refine()` and `z.superRefine()` are supported via generate-and-test, retrying up to `refinementRetries` times (default: 10) before throwing `GENERATION_FAILED`. `z.preprocess()` with a non-primitive output and `z.pipe()` (v3) throw `UNSUPPORTED_SCHEMA` with an actionable message pointing to the path-based generator workaround.
+
+`z.custom<T>()` generates a random primitive (string, number, or boolean) as best-effort — the user-defined predicate cannot be introspected. If the predicate rejects the value, use a path-based generator to supply a valid value directly: `generators: { "myField": () => yourValidValue }`.
+
+`z.never()` throws `UNSUPPORTED_SCHEMA` — it has no valid value by definition.
 
 ---
 
@@ -695,15 +796,13 @@ zodmint derives the data from the schema itself, so constraints are always satis
 
 ## Roadmap
 
-The immediate v1 backlog is focused on a few remaining gaps:
+Remaining gaps for v2:
 
-**Transforms on overrides** — Overrides on schemas containing `.transform()` are not yet supported. This requires tracking the pre-transform domain, which is deferred to v2.
+**Transforms on overrides** — Overrides on schemas containing `.transform()` are not yet supported. This requires tracking the pre-transform domain, deferred to v2.
 
 **Async refinements** — `z.superRefine()` returning a `Promise` is not yet supported. Synchronous refinements work today; async variants throw `UNSUPPORTED_SCHEMA`.
 
-**`z.custom()` and `z.refine()` on complex output types** — The generate-and-test strategy works well for most cases but has no way to introspect what a custom predicate actually requires. A path-based generator is the recommended escape hatch for highly selective predicates.
-
-**`z.preprocess()` with non-primitive output** — Handled when the output is a primitive (treated like `z.coerce.*`), but arbitrary preprocess transforms with object or array outputs remain unsupported.
+**`z.preprocess()` with non-primitive output** — Handled when the output is a primitive (treated like `z.coerce.*`), but arbitrary preprocess transforms with object or array outputs remain unsupported. Use a path-based generator as a workaround.
 
 ---
 
@@ -712,6 +811,37 @@ Zod v4 uses `new Function()` internally to compile schema validators. If your en
 ---
 
 ## Integrations
+
+### fast-check
+
+zodmint ships a `zodmint/fast-check` sub-entry that converts any Zod schema into a real `fc.Arbitrary` with full shrinking support. Unlike `fc.constant(mock(schema))`, these arbitraries let fast-check find the minimal failing case when a property fails.
+
+```bash
+npm install fast-check
+```
+
+```typescript
+import { arb } from "zodmint/fast-check";
+import * as fc from "fast-check";
+
+// Property-based test: every generated user must pass schema validation
+fc.assert(
+  fc.property(arb(UserSchema), (user) => {
+    return UserSchema.safeParse(user).success;
+  })
+);
+
+// Combine with fast-check's own primitives
+fc.assert(
+  fc.property(arb(UserSchema), fc.string(), (user, role) => {
+    return processUser({ ...user, role }).success;
+  })
+);
+```
+
+`arb()` maps each Zod type to a native fast-check arbitrary: `z.string()` to `fc.string()`, `z.number().int()` to `fc.integer()`, `z.object({})` to `fc.record()`, `z.union()` to `fc.oneof()`, and so on. Format constraints (`z.email()`, `z.uuid()`) use specialized fc generators. Complex formats that fast-check cannot model natively fall back to `fc.constant(mock(schema))` with a code comment explaining why.
+
+---
 
 ### MSW (Mock Service Worker)
 

@@ -1,4 +1,5 @@
 import type { FieldMatcher, MatcherContext } from "../config.js";
+import type { Session } from "../session.js";
 
 /**
  * Checks custom matchers against the leaf key.
@@ -9,9 +10,10 @@ export function applyCustomMatchers(
   leafKey: string | null,
   matchers: FieldMatcher[],
   path: string[] = [],
+  session?: Session,
 ): unknown {
   if (!leafKey || matchers.length === 0) return undefined;
-  const ctx: MatcherContext = { path, leaf: leafKey };
+  const ctx: MatcherContext = { path, leaf: leafKey, session };
   for (const matcher of matchers) {
     if (matcher.pattern.test(leafKey)) {
       return matcher.generate(ctx);
