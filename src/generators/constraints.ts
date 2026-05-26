@@ -404,7 +404,7 @@ export function generateEdgeString(c: StringConstraints, rng: SeededRNG): string
   if (c.base64url) return "YQ";
   if (c.emoji) return "😀";
 
-  // startsWith/endsWith anchor — handle combined case first
+  // startsWith/endsWith/includes anchors — handle combined case first
   if (c.startsWith && c.endsWith) {
     const fixed = c.startsWith + c.endsWith;
     const minLen = Math.max(fixed.length, c.min ?? 0);
@@ -418,6 +418,10 @@ export function generateEdgeString(c: StringConstraints, rng: SeededRNG): string
   if (c.endsWith) {
     const minLen = Math.max(c.endsWith.length, c.min ?? 0);
     return "a".repeat(Math.max(0, minLen - c.endsWith.length)) + c.endsWith;
+  }
+  if (c.includes) {
+    const minLen = Math.max(c.includes.length, c.min ?? 0);
+    return "a".repeat(Math.max(0, minLen - c.includes.length)) + c.includes;
   }
 
   // Pick between shortest valid and longest valid
@@ -457,7 +461,7 @@ export function generateEdgeNumber(c: NumberConstraints): number {
     });
 
   if (candidates.length === 0) return lo;
-  // Alternate between low and high boundary for variety
+  // Return the lowest valid boundary value (candidates[0] is always lo after filtering)
   return candidates[0]!;
 }
 
@@ -587,7 +591,8 @@ export function generateString(
       const maxOk = c.max === undefined || len <= c.max;
       const swOk = !c.startsWith || semanticValue.startsWith(c.startsWith);
       const ewOk = !c.endsWith || semanticValue.endsWith(c.endsWith);
-      if (minOk && maxOk && swOk && ewOk) return semanticValue;
+      const inclOk = !c.includes || semanticValue.includes(c.includes);
+      if (minOk && maxOk && swOk && ewOk && inclOk) return semanticValue;
     }
   }
 
@@ -697,9 +702,24 @@ export { applyStringSemantic };
 function generateConstrainedString(c: StringConstraints, rng: SeededRNG): string {
   const prefix = c.startsWith ?? "";
   const suffix = c.endsWith ?? "";
+  const needle = c.includes ?? "";
   const fixed = c.length;
-  const minLen = fixed ?? Math.max(c.min ?? 0, prefix.length + suffix.length);
+  // Compute minimum structural length: prefix + needle (embedded) + suffix
+  const structuralMin = prefix.length + needle.length + suffix.length;
+  const minLen = fixed ?? Math.max(c.min ?? 0, structuralMin);
   const maxLen = fixed ?? Math.max(c.max ?? Math.max(minLen + 8, 12), minLen);
+
+  if (needle) {
+    // Generate random padding before and after the embedded needle
+    const available = Math.max(0, rng.nextInt(
+      Math.max(0, minLen - structuralMin),
+      Math.max(0, maxLen - structuralMin),
+    ));
+    const beforeLen = rng.nextInt(0, available);
+    const afterLen = available - beforeLen;
+    return prefix + randomString(rng, beforeLen) + needle + randomString(rng, afterLen) + suffix;
+  }
+
   const middleLen = rng.nextInt(
     Math.max(0, minLen - prefix.length - suffix.length),
     Math.max(0, maxLen - prefix.length - suffix.length),

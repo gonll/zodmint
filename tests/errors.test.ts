@@ -114,14 +114,14 @@ describe("z.custom()", () => {
   });
 });
 
-describe("UNSUPPORTED_MODE errors", () => {
+describe("generation modes", () => {
   it("mode: 'edge' does not throw — it generates boundary values", () => {
     expect(() => mock(z.string(), { mode: "edge" })).not.toThrow();
     const result = mock(z.string(), { mode: "edge" });
     expect(z.string().safeParse(result).success).toBe(true);
   });
 
-  it("mode: 'random' does not throw — it is now implemented", () => {
+  it("mode: 'random' does not throw — it is implemented", () => {
     expect(() => mock(z.string(), { mode: "random" })).not.toThrow();
     const result = mock(z.string(), { mode: "random" });
     expect(z.string().safeParse(result).success).toBe(true);

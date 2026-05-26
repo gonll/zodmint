@@ -81,15 +81,11 @@ function dispatch(
     const pathKey = ctx.path.join(".");
     const gen = ctx.generators[pathKey];
     if (gen !== undefined) {
-      const genValue = gen();
-      const check = schema.safeParse(genValue);
-      if (!check.success) {
-        throw new ZodForgeError(
-          `Generator at path "${pathKey}" returned an invalid value: ${JSON.stringify(genValue)}`,
-          "INVALID_OVERRIDE",
-        );
-      }
-      return check.data;
+      // Return the raw generator value without calling safeParse here.
+      // The outer runPipeline() calls safeParse exactly once on the root schema,
+      // which traverses into this field. Calling safeParse here too would run any
+      // .transform() on this schema twice, violating core invariant #2.
+      return gen();
     }
   }
 
@@ -399,6 +395,9 @@ function dispatchString(
             case "ends_with":
               c.endsWith = (cd.suffix ?? cd.value) as string | undefined;
               break;
+            case "includes":
+              c.includes = (cd.includes ?? cd.value) as string | undefined;
+              break;
             case "cuid": c.cuid = true; break;
             case "cuid2": c.cuid2 = true; break;
             case "ulid": c.ulid = true; break;
@@ -435,6 +434,7 @@ function dispatchString(
         case "regex": c.regex = check.regex; break;
         case "startsWith": c.startsWith = check.value; break;
         case "endsWith": c.endsWith = check.value; break;
+        case "includes": c.includes = check.value; break;
         case "cuid": c.cuid = true; break;
         case "cuid2": c.cuid2 = true; break;
         case "ulid": c.ulid = true; break;
@@ -576,8 +576,15 @@ function dispatchNumber(
 function dispatchBigInt(
   schema: z.ZodTypeAny,
   ctx: GenerationContext,
-  _config: GlobalConfig,
+  config: GlobalConfig,
 ): bigint {
+  // Custom matchers (realistic mode only) — same precedence as dispatchString/dispatchNumber
+  if (ctx.mode === "realistic") {
+    const semanticHint = getDescription(schema) ?? leafKey(ctx.path);
+    const custom = applyCustomMatchers(semanticHint, config.matchers, ctx.path, ctx.session);
+    if (custom !== undefined) return BigInt(custom as string | number | bigint | boolean);
+  }
+
   const c: BigIntConstraints = {};
 
   if (isV4(schema)) {
@@ -601,13 +608,29 @@ function dispatchBigInt(
     }
   } else {
     // v3
+    // .positive() → { kind: "min", value: 0n, inclusive: false } (exclusive → use gt)
+    // .nonnegative() → { kind: "min", value: 0n, inclusive: true }
+    // .negative() → { kind: "max", value: 0n, inclusive: false } (exclusive → use lt)
+    // .nonpositive() → { kind: "max", value: 0n, inclusive: true }
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const checks = getChecks(schema) as any[];
 
     for (const check of checks) {
       switch (check.kind) {
-        case "min": c.min = check.value; break;
-        case "max": c.max = check.value; break;
+        case "min":
+          if (check.inclusive === false) {
+            c.gt = check.value as bigint;
+          } else {
+            c.min = check.value as bigint;
+          }
+          break;
+        case "max":
+          if (check.inclusive === false) {
+            c.lt = check.value as bigint;
+          } else {
+            c.max = check.value as bigint;
+          }
+          break;
         case "multipleOf": c.multipleOf = check.value; break;
       }
     }
@@ -620,8 +643,15 @@ function dispatchBigInt(
 function dispatchDate(
   schema: z.ZodTypeAny,
   ctx: GenerationContext,
-  _config: GlobalConfig,
+  config: GlobalConfig,
 ): Date {
+  // Custom matchers (realistic mode only) — same precedence as dispatchString/dispatchNumber
+  if (ctx.mode === "realistic") {
+    const semanticHint = getDescription(schema) ?? leafKey(ctx.path);
+    const custom = applyCustomMatchers(semanticHint, config.matchers, ctx.path, ctx.session);
+    if (custom !== undefined) return new Date(custom as string | number | Date);
+  }
+
   const c: DateConstraints = {};
 
   if (isV4(schema)) {
@@ -660,10 +690,11 @@ function dispatchNativeEnum(
   ctx: GenerationContext,
 ): unknown {
   const enumObj = getNativeEnumObject(schema);
-  // Native enums can have numeric reverse mappings — only take values that
-  // are NOT numeric-string keys pointing to a string (i.e., filter reverse map)
+  // TypeScript numeric enums have reverse-mapping entries (e.g. { Up: 0, 0: "Up" }).
+  // Keep numeric values (always direct members) and string values whose own key lookup
+  // is not numeric (i.e., string-valued enum members, not reverse-mapping labels).
   const values = Object.values(enumObj).filter(
-    (v) => typeof v === "string" || typeof enumObj[v as number] !== "string",
+    (v) => typeof v === "number" || (typeof v === "string" && typeof enumObj[v] !== "number"),
   );
   return ctx.rng.pick(values);
 }
@@ -803,7 +834,9 @@ function dispatchDiscriminatedUnion(
 ): unknown {
   const options = getUnionOptions(schema);
   const chosen = ctx.rng.pick(options);
-  return dispatchObject(chosen, ctx, config);
+  // Use dispatch() (not dispatchObject()) so the chosen branch goes through the
+  // full pipeline: refinement retry, violatePaths, v4 checks, etc.
+  return dispatch(chosen, ctx, config, leafKey(ctx.path));
 }
 
 function dispatchIntersection(

@@ -31,6 +31,7 @@ coverage/
 
 # Local playground
 playground/
+other/
 
 # Temp
 *.tmp
@@ -44,6 +45,3 @@ CLAUDE.md
 .claude/
 NEXT_STEPS.md
 ROADMAP.md
-
-# Marketing / Production
-other/

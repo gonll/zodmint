@@ -5,6 +5,7 @@
 import { describe, it, expect } from "vitest";
 import { z } from "zod";
 import { mock } from "../src/mock.js";
+import { ZodForgeError } from "../src/errors.js";
 
 function valid<S extends z.ZodTypeAny>(schema: S, times = 10) {
   for (let i = 0; i < times; i++) {
@@ -251,5 +252,111 @@ describe("validity contract — z.promise()", () => {
     expect(result).toBeInstanceOf(Promise);
     const value = await result;
     expect(value.id).toMatch(/^[0-9a-f-]{36}$/i);
+  });
+});
+
+describe("validity contract — numeric nativeEnum", () => {
+  enum Direction {
+    Up = 0,
+    Down = 1,
+    Left = 2,
+    Right = 3,
+  }
+
+  enum Status {
+    Active = "active",
+    Inactive = "inactive",
+  }
+
+  it("numeric nativeEnum generates valid numeric values", () => {
+    const schema = z.nativeEnum(Direction);
+    for (let i = 0; i < 20; i++) {
+      const value = mock(schema);
+      const result = schema.safeParse(value);
+      expect(result.success).toBe(true);
+      // Must be a numeric value, not a string key name
+      expect(typeof value).toBe("number");
+      expect([0, 1, 2, 3]).toContain(value);
+    }
+  });
+
+  it("string nativeEnum generates valid string values", () => {
+    const schema = z.nativeEnum(Status);
+    for (let i = 0; i < 10; i++) {
+      const value = mock(schema);
+      expect(schema.safeParse(value).success).toBe(true);
+      expect(typeof value).toBe("string");
+    }
+  });
+});
+
+describe("validity contract — z.string().includes()", () => {
+  it("includes constraint: generated string contains required substring", () => {
+    const schema = z.string().includes("foo");
+    for (let i = 0; i < 20; i++) {
+      const value = mock(schema);
+      expect(schema.safeParse(value).success).toBe(true);
+      expect(value).toContain("foo");
+    }
+  });
+
+  it("includes + min length: both satisfied", () => {
+    const schema = z.string().includes("bar").min(10);
+    for (let i = 0; i < 10; i++) {
+      const value = mock(schema);
+      expect(schema.safeParse(value).success).toBe(true);
+      expect(value).toContain("bar");
+      expect(value.length).toBeGreaterThanOrEqual(10);
+    }
+  });
+});
+
+describe("validity contract — z.bigint() constraints", () => {
+  it("z.bigint().positive() generates a value > 0n", () => {
+    const schema = z.bigint().positive();
+    for (let i = 0; i < 20; i++) {
+      const value = mock(schema);
+      expect(schema.safeParse(value).success).toBe(true);
+      expect(value > 0n).toBe(true);
+    }
+  });
+
+  it("z.bigint().negative() generates a value < 0n", () => {
+    const schema = z.bigint().negative();
+    for (let i = 0; i < 20; i++) {
+      const value = mock(schema);
+      expect(schema.safeParse(value).success).toBe(true);
+      expect(value < 0n).toBe(true);
+    }
+  });
+
+  it("z.bigint().nonnegative() generates a value >= 0n", () => {
+    const schema = z.bigint().nonnegative();
+    for (let i = 0; i < 20; i++) {
+      const value = mock(schema);
+      expect(schema.safeParse(value).success).toBe(true);
+      expect(value >= 0n).toBe(true);
+    }
+  });
+
+  it("z.bigint().nonpositive() generates a value <= 0n", () => {
+    const schema = z.bigint().nonpositive();
+    for (let i = 0; i < 20; i++) {
+      const value = mock(schema);
+      expect(schema.safeParse(value).success).toBe(true);
+      expect(value <= 0n).toBe(true);
+    }
+  });
+});
+
+describe("validity contract — z.function() throws UNSUPPORTED_SCHEMA", () => {
+  it("z.function() throws ZodForgeError with UNSUPPORTED_SCHEMA", () => {
+    expect(() => mock(z.function())).toThrow(ZodForgeError);
+    try {
+      mock(z.function());
+    } catch (e) {
+      expect(e).toBeInstanceOf(ZodForgeError);
+      expect((e as ZodForgeError).code).toBe("UNSUPPORTED_SCHEMA");
+    }
   });
 });

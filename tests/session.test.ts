@@ -142,4 +142,26 @@ describe("session in mock()", () => {
     expect(a.userId).toBe(1);
     expect(b.userId).toBe(2);
   });
+
+  it("path-based generators and session coexist without interference", () => {
+    const session = createSession();
+    session.store.set("tenantId", "acme");
+
+    const schema = z.object({
+      name: z.string(),
+      count: z.number().int().positive(),
+    });
+
+    const result = mock(schema, {
+      session,
+      generators: {
+        count: () => 42,
+      },
+    });
+
+    expect(result.count).toBe(42);
+    expect(schema.safeParse(result).success).toBe(true);
+    // Session store is unaffected by generators
+    expect(session.store.get("tenantId")).toBe("acme");
+  });
 });

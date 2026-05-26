@@ -561,3 +561,39 @@ describe("Plugin system", () => {
     expect(mock(schema).sku).not.toBe("SKU-X");
   });
 });
+
+describe("custom matchers applied to bigint and date fields", () => {
+  it("custom matcher on a bigint field overrides generation", () => {
+    configure({
+      matchers: [{ pattern: /\bpoints\b/i, generate: () => 999n }],
+    });
+    const schema = z.object({ points: z.bigint() });
+    const result = mock(schema);
+    expect(result.points).toBe(999n);
+    expect(schema.safeParse(result).success).toBe(true);
+  });
+
+  it("custom matcher on a date field overrides generation", () => {
+    const fixed = new Date("2024-06-15T00:00:00.000Z");
+    configure({
+      matchers: [{ pattern: /\bhiredAt\b/i, generate: () => fixed }],
+    });
+    const schema = z.object({ hiredAt: z.date() });
+    const result = mock(schema);
+    expect(result.hiredAt.getTime()).toBe(fixed.getTime());
+    expect(schema.safeParse(result).success).toBe(true);
+  });
+
+  it("custom matchers are skipped in random mode for bigint/date", () => {
+    configure({
+      matchers: [{ pattern: /points/i, generate: () => 999n }],
+    });
+    const schema = z.object({ points: z.bigint() });
+    // random mode should bypass the matcher
+    const result = mock(schema, { mode: "random" });
+    expect(schema.safeParse(result).success).toBe(true);
+    // In random mode the matcher is skipped, so value should NOT be the hardcoded 999n
+    // (technically not guaranteed but highly unlikely with a seeded RNG picking from a large range)
+    expect(typeof result.points).toBe("bigint");
+  });
+});

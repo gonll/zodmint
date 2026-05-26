@@ -4,6 +4,22 @@ All notable changes to zodmint are documented here. This project follows [Keep a
 
 ---
 
+## [1.8.1] - 2026-05-25
+
+### Fixed
+- **Numeric `z.nativeEnum()`** - generated string key names instead of numeric values due to an inverted filter. Now correctly returns the numeric member values.
+- **`z.string().includes()`** - the constraint was parsed but never applied. Generated strings now always contain the required substring.
+- **`z.bigint().positive()` / `.negative()`** - v3 exclusive bounds (`.positive()` = `min(0, exclusive)`) were treated as inclusive, allowing `0n` which fails `safeParse`. Now maps to `gt`/`lt` correctly.
+- **Double `safeParse` on path-based generators** - when a generator matched a field with `.transform()`, the transform ran twice: once inside `dispatch()` and again in the outer pipeline. The inner `safeParse` call is removed; the pipeline's single outer `safeParse` handles validation.
+- **`dispatchDiscriminatedUnion` bypassed pipeline** - called `dispatchObject()` directly, skipping refinement retry logic. Now routes through `dispatch()` so `.refine()` on a branch object retries correctly.
+- **`arb()` set/map size constraints ignored** - `arbSet` and `arbMap` hardcoded `{min:2, max:4}`. Now read constraints from the schema. Both also switch to `fc.uniqueArray` so shrinking cannot collapse the collection below the minimum.
+- **`arb()` tuple `.rest()` elements ignored** - `arbTuple` only generated fixed items. Now appends 0–3 rest elements when the schema has a `.rest()` schema.
+- **`lazyDepth` module-level state** - replaced with a closure parameter threaded through `arbAny` to prevent corruption across concurrent `arb()` calls.
+- **Custom matchers not applied to `z.bigint()` / `z.date()`** - `dispatchBigInt` and `dispatchDate` now call `applyCustomMatchers()` in realistic mode, matching the behavior of `dispatchString` and `dispatchNumber`.
+- Removed dead `UNSUPPORTED_MODE` error code (never thrown).
+- Fixed misleading "alternate between low and high boundary" comment in `generateEdgeNumber` (always returned the lowest candidate).
+- Fixed CLAUDE.md pipeline step ordering — overrides are applied before `safeParse`, not after.
+
 ## [1.8.0] - 2026-05-25
 
 ### Added

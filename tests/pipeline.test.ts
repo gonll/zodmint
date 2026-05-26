@@ -17,6 +17,42 @@ describe("discriminated union", () => {
       expect(schema.safeParse(result).success).toBe(true);
     }
   });
+
+  it("branch with object-level refine retries correctly (pipeline bypass fix)", () => {
+    // If dispatchDiscriminatedUnion called dispatchObject() directly it would skip
+    // refinement retry logic and throw GENERATION_FAILED on any branch with .refine().
+    const refined = z.discriminatedUnion("type", [
+      z.object({ type: z.literal("a"), val: z.number().int() }).refine(
+        (v) => v.val >= 0,
+        "must be non-negative",
+      ),
+      z.object({ type: z.literal("b"), label: z.string() }),
+    ]);
+    for (let i = 0; i < 20; i++) {
+      const result = mock(refined);
+      expect(refined.safeParse(result).success).toBe(true);
+    }
+  });
+
+  it("path-based generator on a discriminated-union field runs transform only once", () => {
+    // Regression for the double-safeParse bug: a path-based generator on a field
+    // with .transform() used to call field.safeParse() inside dispatch() AND then
+    // the root safeParse() ran the transform again, producing wrong output.
+    const schema = z.object({
+      label: z.string().transform((s) => s.toUpperCase()),
+      count: z.number().int(),
+    });
+
+    const result = mock(schema, {
+      generators: {
+        // Supplying a plain string; .transform() should uppercase it exactly once.
+        label: () => "hello",
+      },
+    });
+
+    // The transform runs once → "HELLO"
+    expect(result.label).toBe("HELLO");
+  });
 });
 
 describe("z.union()", () => {

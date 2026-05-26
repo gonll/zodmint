@@ -1,6 +1,6 @@
 {
   "name": "zodmint",
-  "version": "1.8.0",
+  "version": "1.8.1",
   "description": "TypeScript-first schema-valid test fixture generator for Zod schemas",
   "type": "module",
   "main": "./dist/index.cjs",

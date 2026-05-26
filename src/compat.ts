@@ -383,9 +383,12 @@ export function getEnumValues(schema: z.ZodTypeAny): unknown[] {
     const def = rawDef(schema);
     // def.entries is an object mapping key→value
     const entries = def.entries as Record<string, unknown>;
-    // Filter out numeric reverse-mapping keys (for numeric enums)
+    // Filter out reverse-mapping entries added by TypeScript for numeric enums.
+    // For `enum Dir { Up = 0, Down = 1 }`, entries includes both { Up: 0, Down: 1 }
+    // (forward) and { 0: "Up", 1: "Down" } (reverse). We want only the forward values.
+    // Keep: numeric values (always forward) and string values whose own key lookup is NOT numeric.
     return Object.values(entries).filter(
-      (v) => typeof v === "string" || typeof entries[v as number] !== "string",
+      (v) => typeof v === "number" || (typeof v === "string" && typeof entries[v] !== "number"),
     );
   }
   // v3

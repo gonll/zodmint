@@ -36,6 +36,11 @@ export function schemaHasTransform(schema: z.ZodTypeAny): boolean {
   if (def.left && def.right) return schemaHasTransform(def.left as z.ZodTypeAny) || schemaHasTransform(def.right as z.ZodTypeAny);
   if (def.items) return (def.items as z.ZodTypeAny[]).some(schemaHasTransform);
 
+  // Intentionally does NOT recurse into object field shapes (def.shape).
+  // Field-level transforms don't affect the top-level override contract:
+  // overrides target the root output type, not individual field input types.
+  // Recursing into shape would cause false positives on schemas like
+  // z.object({ name: z.string().transform(...) }) and block all top-level overrides.
   return false;
 }
 

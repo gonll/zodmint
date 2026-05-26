@@ -1,6 +1,5 @@
 export type ZodForgeErrorCode =
   | "UNSUPPORTED_SCHEMA"
-  | "UNSUPPORTED_MODE"
   | "INVALID_OVERRIDE"
   | "REGEX_UNSUPPORTED"
   | "MAX_DEPTH_EXCEEDED"

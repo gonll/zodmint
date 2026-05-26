@@ -77,4 +77,44 @@ describe("arb()", () => {
     const schema = z.tuple([z.string(), z.number()]);
     fc.assert(fc.property(arb(schema), v => schema.safeParse(v).success));
   });
+
+  it("arb(z.set(z.string()).min(5)) - all generated sets have size >= 5", () => {
+    const schema = z.set(z.string()).min(5);
+    fc.assert(fc.property(arb(schema), (v) => {
+      return schema.safeParse(v).success && (v as Set<unknown>).size >= 5;
+    }));
+  });
+
+  it("arb(z.set(z.string()).min(3).max(5)) - size within bounds", () => {
+    const schema = z.set(z.string()).min(3).max(5);
+    fc.assert(fc.property(arb(schema), (v) => {
+      const size = (v as Set<unknown>).size;
+      return schema.safeParse(v).success && size >= 3 && size <= 5;
+    }));
+  });
+
+  it("arb(z.map(z.string(), z.number()).min(3)) - map size >= 3", () => {
+    const schema = z.map(z.string(), z.number()).min(3);
+    fc.assert(fc.property(arb(schema), (v) => {
+      return schema.safeParse(v).success && (v as Map<unknown, unknown>).size >= 3;
+    }));
+  });
+
+  it("arb(z.tuple([z.string()]).rest(z.number())) - fixed + rest elements all valid", () => {
+    const schema = z.tuple([z.string()]).rest(z.number());
+    fc.assert(fc.property(arb(schema), (v) => {
+      if (!schema.safeParse(v).success) return false;
+      const arr = v as unknown[];
+      if (typeof arr[0] !== "string") return false;
+      // rest elements (index >= 1) must be numbers
+      return arr.slice(1).every(el => typeof el === "number");
+    }));
+  });
+
+  it("arb(z.tuple([]).rest(z.boolean())) - rest-only tuple, all elements boolean", () => {
+    const schema = z.tuple([]).rest(z.boolean());
+    fc.assert(fc.property(arb(schema), (v) => {
+      return schema.safeParse(v).success && (v as unknown[]).every(el => typeof el === "boolean");
+    }));
+  });
 });

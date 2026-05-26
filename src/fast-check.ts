@@ -40,7 +40,7 @@ export function arb<S extends z.ZodTypeAny>(schema: S): fc.Arbitrary<z.infer<S>>
 // Internal dispatcher
 // ---------------------------------------------------------------------------
 
-function arbAny(schema: z.ZodTypeAny): fc.Arbitrary<unknown> {
+function arbAny(schema: z.ZodTypeAny, lazyDepth = 0): fc.Arbitrary<unknown> {
   const tn = typeName(schema);
 
   switch (tn) {
@@ -71,54 +71,54 @@ function arbAny(schema: z.ZodTypeAny): fc.Arbitrary<unknown> {
 
     case "optional":
       // freq: 3 means roughly 75% chance of value, 25% nil -- close to mock()'s 70/30
-      return fc.option(arbAny(getInnerType(schema)), { nil: undefined, freq: 3 });
+      return fc.option(arbAny(getInnerType(schema), lazyDepth), { nil: undefined, freq: 3 });
 
     case "nullable":
       // freq: 4 means roughly 80% chance of value -- close to mock()'s 80/20
-      return fc.option(arbAny(getInnerType(schema)), { nil: null, freq: 4 });
+      return fc.option(arbAny(getInnerType(schema), lazyDepth), { nil: null, freq: 4 });
 
     case "default":
-      return arbAny(getInnerType(schema));
+      return arbAny(getInnerType(schema), lazyDepth);
 
     case "catch":
-      return arbAny(getInnerType(schema));
+      return arbAny(getInnerType(schema), lazyDepth);
 
     case "readonly":
-      return arbAny(getInnerType(schema));
+      return arbAny(getInnerType(schema), lazyDepth);
 
     case "branded":
-      return arbAny(getBrandedInner(schema));
+      return arbAny(getBrandedInner(schema), lazyDepth);
 
     case "array":
-      return arbArray(schema);
+      return arbArray(schema, lazyDepth);
 
     case "object":
-      return arbObject(schema);
+      return arbObject(schema, lazyDepth);
 
     case "tuple":
-      return arbTuple(schema);
+      return arbTuple(schema, lazyDepth);
 
     case "union":
-      return arbUnion(schema);
+      return arbUnion(schema, lazyDepth);
 
     case "discriminated_union":
       // Treat the same as union -- fc.oneof over all options
-      return arbUnion(schema);
+      return arbUnion(schema, lazyDepth);
 
     case "intersection":
-      return arbIntersection(schema);
+      return arbIntersection(schema, lazyDepth);
 
     case "record":
-      return arbRecord(schema);
+      return arbRecord(schema, lazyDepth);
 
     case "map":
-      return arbMap(schema);
+      return arbMap(schema, lazyDepth);
 
     case "set":
-      return arbSet(schema);
+      return arbSet(schema, lazyDepth);
 
     case "lazy":
-      return arbLazy(schema);
+      return arbLazy(schema, lazyDepth);
 
     case "any":
     case "unknown":
@@ -139,7 +139,7 @@ function arbAny(schema: z.ZodTypeAny): fc.Arbitrary<unknown> {
       return fc.constant(Symbol("zodmint-arb"));
 
     case "promise":
-      return arbAny(getInnerType(schema)).map((v) => Promise.resolve(v));
+      return arbAny(getInnerType(schema), lazyDepth).map((v) => Promise.resolve(v));
 
     case "effects": {
       // v3 ZodEffects: may be a transform, preprocess, or refinement.
@@ -162,7 +162,7 @@ function arbAny(schema: z.ZodTypeAny): fc.Arbitrary<unknown> {
         const outType = typeName(pipeOut);
         const coercePrimitives = ["string", "number", "boolean", "bigint", "date"];
         if (coercePrimitives.includes(outType)) {
-          return arbAny(pipeOut);
+          return arbAny(pipeOut, lazyDepth);
         }
         // Complex preprocess output -- fall back to mock()
         return fc.constant(mock(schema));
@@ -501,22 +501,22 @@ function arbDate(schema: z.ZodTypeAny): fc.Arbitrary<Date> {
 // Array
 // ---------------------------------------------------------------------------
 
-function arbArray(schema: z.ZodTypeAny): fc.Arbitrary<unknown[]> {
+function arbArray(schema: z.ZodTypeAny, lazyDepth: number): fc.Arbitrary<unknown[]> {
   const { min, max, exact } = getArrayBounds(schema);
   const minLen = exact ?? min ?? 1;
   const maxLen = exact ?? max ?? 5;
-  return fc.array(arbAny(getArrayElement(schema)), { minLength: minLen, maxLength: maxLen });
+  return fc.array(arbAny(getArrayElement(schema), lazyDepth), { minLength: minLen, maxLength: maxLen });
 }
 
 // ---------------------------------------------------------------------------
 // Object
 // ---------------------------------------------------------------------------
 
-function arbObject(schema: z.ZodTypeAny): fc.Arbitrary<Record<string, unknown>> {
+function arbObject(schema: z.ZodTypeAny, lazyDepth: number): fc.Arbitrary<Record<string, unknown>> {
   const shape = getShape(schema);
   const fieldArbs: Record<string, fc.Arbitrary<unknown>> = {};
   for (const [key, fieldSchema] of Object.entries(shape)) {
-    fieldArbs[key] = arbAny(fieldSchema as z.ZodTypeAny);
+    fieldArbs[key] = arbAny(fieldSchema as z.ZodTypeAny, lazyDepth);
   }
   return fc.record(fieldArbs);
 }
@@ -525,23 +525,37 @@ function arbObject(schema: z.ZodTypeAny): fc.Arbitrary<Record<string, unknown>> 
 // Tuple
 // ---------------------------------------------------------------------------
 
-function arbTuple(schema: z.ZodTypeAny): fc.Arbitrary<unknown[]> {
+function arbTuple(schema: z.ZodTypeAny, lazyDepth: number): fc.Arbitrary<unknown[]> {
   const items = getTupleItems(schema);
+  const restSchema = rawDef(schema).rest as z.ZodTypeAny | undefined;
+
+  const fixedArbs = items.map((item) => arbAny(item as z.ZodTypeAny, lazyDepth));
+
+  if (restSchema) {
+    // Generate 0–3 rest elements appended after the fixed items
+    const restArb = fc.array(arbAny(restSchema, lazyDepth), { minLength: 0, maxLength: 3 });
+    if (fixedArbs.length === 0) {
+      return restArb;
+    }
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const fixedArb = (fc.tuple as any)(...fixedArbs) as fc.Arbitrary<unknown[]>;
+    return fc.tuple(fixedArb, restArb).map(([fixed, rest]) => [...fixed, ...rest]);
+  }
+
   if (items.length === 0) return fc.constant([]);
   // fc.tuple requires at least one element and returns a typed tuple
-  const arbs = items.map((item) => arbAny(item as z.ZodTypeAny));
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  return (fc.tuple as any)(...arbs) as fc.Arbitrary<unknown[]>;
+  return (fc.tuple as any)(...fixedArbs) as fc.Arbitrary<unknown[]>;
 }
 
 // ---------------------------------------------------------------------------
 // Union
 // ---------------------------------------------------------------------------
 
-function arbUnion(schema: z.ZodTypeAny): fc.Arbitrary<unknown> {
+function arbUnion(schema: z.ZodTypeAny, lazyDepth: number): fc.Arbitrary<unknown> {
   const options = getUnionOptions(schema);
   if (options.length === 0) return fc.constant(undefined);
-  const arbs = options.map((opt) => arbAny(opt as z.ZodTypeAny));
+  const arbs = options.map((opt) => arbAny(opt as z.ZodTypeAny, lazyDepth));
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   return (fc.oneof as any)(...arbs) as fc.Arbitrary<unknown>;
 }
@@ -550,9 +564,9 @@ function arbUnion(schema: z.ZodTypeAny): fc.Arbitrary<unknown> {
 // Intersection
 // ---------------------------------------------------------------------------
 
-function arbIntersection(schema: z.ZodTypeAny): fc.Arbitrary<unknown> {
+function arbIntersection(schema: z.ZodTypeAny, lazyDepth: number): fc.Arbitrary<unknown> {
   const { left, right } = getIntersectionParts(schema);
-  return fc.tuple(arbAny(left), arbAny(right)).map(
+  return fc.tuple(arbAny(left, lazyDepth), arbAny(right, lazyDepth)).map(
     ([a, b]) => deepMerge(a as object, b as object),
   );
 }
@@ -561,7 +575,7 @@ function arbIntersection(schema: z.ZodTypeAny): fc.Arbitrary<unknown> {
 // Record
 // ---------------------------------------------------------------------------
 
-function arbRecord(schema: z.ZodTypeAny): fc.Arbitrary<Record<string, unknown>> {
+function arbRecord(schema: z.ZodTypeAny, lazyDepth: number): fc.Arbitrary<Record<string, unknown>> {
   const keySchema = getRecordKeyType(schema);
   const valSchema = getValueType(schema);
   const keyType = typeName(keySchema);
@@ -575,8 +589,8 @@ function arbRecord(schema: z.ZodTypeAny): fc.Arbitrary<Record<string, unknown>> 
   }
 
   return fc.dictionary(
-    arbAny(keySchema) as fc.Arbitrary<string>,
-    arbAny(valSchema),
+    arbAny(keySchema, lazyDepth) as fc.Arbitrary<string>,
+    arbAny(valSchema, lazyDepth),
   );
 }
 
@@ -584,13 +598,44 @@ function arbRecord(schema: z.ZodTypeAny): fc.Arbitrary<Record<string, unknown>> 
 // Map
 // ---------------------------------------------------------------------------
 
-function arbMap(schema: z.ZodTypeAny): fc.Arbitrary<Map<unknown, unknown>> {
+function arbMap(schema: z.ZodTypeAny, lazyDepth: number): fc.Arbitrary<Map<unknown, unknown>> {
   const keySchema = getMapKeyType(schema);
   const valSchema = getValueType(schema);
+
+  // Read size constraints from the schema
+  let min: number | undefined;
+  let max: number | undefined;
+  if (isV4(schema)) {
+    const def = rawDef(schema);
+    const checks = (def.checks ?? []) as unknown[];
+    for (const check of checks) {
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const c = check as any;
+      if (!c._zod) continue;
+      const cd = c._zod.def;
+      if (cd.check === "min_size") min = cd.minimum as number;
+      else if (cd.check === "max_size") max = cd.maximum as number;
+    }
+  } else {
+    const def = rawDef(schema);
+    min = (def.minSize?.value as number | undefined) ?? undefined;
+    max = (def.maxSize?.value as number | undefined) ?? undefined;
+  }
+  const minCount = min ?? 2;
+  const maxCount = max ?? Math.max(minCount, 4);
+
+  // Use fc.uniqueArray with a key selector so duplicate keys can't shrink the Map below minCount.
+  // Plain fc.array can produce duplicate keys which collapse when inserted into the Map.
+  const entryArb = fc.tuple(
+    arbAny(keySchema, lazyDepth),
+    arbAny(valSchema, lazyDepth),
+  ) as fc.Arbitrary<[unknown, unknown]>;
+
   return fc
-    .array(fc.tuple(arbAny(keySchema), arbAny(valSchema)), {
-      minLength: 2,
-      maxLength: 4,
+    .uniqueArray(entryArb, {
+      minLength: minCount,
+      maxLength: maxCount,
+      selector: (entry) => entry[0],
     })
     .map((entries) => new Map(entries));
 }
@@ -599,10 +644,35 @@ function arbMap(schema: z.ZodTypeAny): fc.Arbitrary<Map<unknown, unknown>> {
 // Set
 // ---------------------------------------------------------------------------
 
-function arbSet(schema: z.ZodTypeAny): fc.Arbitrary<Set<unknown>> {
+function arbSet(schema: z.ZodTypeAny, lazyDepth: number): fc.Arbitrary<Set<unknown>> {
   const valSchema = getValueType(schema);
+
+  // Read size constraints from the schema
+  let min: number | undefined;
+  let max: number | undefined;
+  if (isV4(schema)) {
+    const def = rawDef(schema);
+    const checks = (def.checks ?? []) as unknown[];
+    for (const check of checks) {
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const c = check as any;
+      if (!c._zod) continue;
+      const cd = c._zod.def;
+      if (cd.check === "min_size") min = cd.minimum as number;
+      else if (cd.check === "max_size") max = cd.maximum as number;
+    }
+  } else {
+    const def = rawDef(schema);
+    min = (def.minSize?.value as number | undefined) ?? undefined;
+    max = (def.maxSize?.value as number | undefined) ?? undefined;
+  }
+  const minCount = min ?? 2;
+  const maxCount = max ?? Math.max(minCount, 4);
+
+  // Use fc.uniqueArray so that after converting to a Set the size constraint is preserved.
+  // Plain fc.array can produce duplicates which shrink the effective Set size below minCount.
   return fc
-    .array(arbAny(valSchema), { minLength: 2, maxLength: 4 })
+    .uniqueArray(arbAny(valSchema, lazyDepth), { minLength: minCount, maxLength: maxCount })
     .map((arr) => new Set(arr));
 }
 
@@ -610,23 +680,18 @@ function arbSet(schema: z.ZodTypeAny): fc.Arbitrary<Set<unknown>> {
 // Lazy
 // ---------------------------------------------------------------------------
 
-// Depth counter to prevent infinite recursion on self-referential schemas
-let lazyDepth = 0;
 const MAX_LAZY_DEPTH = 3;
 
-function arbLazy(schema: z.ZodTypeAny): fc.Arbitrary<unknown> {
+// lazyDepth is passed as a parameter (not module-level state) so that concurrent
+// or interleaved arb() calls don't corrupt each other's recursion counter.
+function arbLazy(schema: z.ZodTypeAny, lazyDepth: number): fc.Arbitrary<unknown> {
   if (lazyDepth >= MAX_LAZY_DEPTH) {
     // Prevent infinite recursion for self-referential schemas.
     // Fall back to zodmint's depth-limited generator at this node.
     return fc.constant(mock(schema));
   }
 
-  lazyDepth++;
-  try {
-    const getter = getLazyGetter(schema);
-    const inner = getter();
-    return arbAny(inner);
-  } finally {
-    lazyDepth--;
-  }
+  const getter = getLazyGetter(schema);
+  const inner = getter();
+  return arbAny(inner, lazyDepth + 1);
 }
