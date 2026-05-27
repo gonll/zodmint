@@ -29,6 +29,12 @@ Thumbs.db
 # Test coverage
 coverage/
 
+# zodmint pin test artifacts
+tests/__pin_test__/
+tests/__test_write__/
+__zodmint__/
+__fixtures__/
+
 # Local playground
 playground/
 other/
