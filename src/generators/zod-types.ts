@@ -321,9 +321,11 @@ function dispatchString(
   const description = getDescription(schema);
   const semanticHint = description ?? leaf;
 
-  // Check custom matchers first (against description or leaf) — only in realistic mode
+  // Check custom matchers first (against description or leaf) — only in realistic mode.
+  // Pass `leaf` as actualLeaf so ctx.leaf always contains the real field name, not
+  // the description string (fixes MatcherContext.leaf when .describe() is used).
   if (ctx.mode === "realistic") {
-    const custom = applyCustomMatchers(semanticHint, config.matchers, ctx.path, ctx.session);
+    const custom = applyCustomMatchers(semanticHint, config.matchers, ctx.path, ctx.session, leaf);
     if (custom !== undefined) return String(custom);
   }
 
