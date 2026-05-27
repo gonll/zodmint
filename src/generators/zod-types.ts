@@ -55,6 +55,7 @@ import {
   normalizeV4Checks,
 } from "../compat.js";
 import { createSeededRNG } from "../context.js";
+import { getGenerationHint } from "../hint.js";
 
 // ---------------------------------------------------------------------------
 // Main dispatcher
@@ -99,13 +100,19 @@ function dispatch(
 
   if (!skipRefinementDetection) {
     // v4: schema has embedded refinement checks (z.refine() / z.superRefine())
-    // Use generate-and-test strategy: generate candidate, validate with full schema
     if (hasRefinementChecks(schema)) {
+      // In async mode: skip the sync retry loop entirely. The outer runPipelineAsync
+      // calls safeParseAsync, which evaluates both sync and async refinements correctly.
+      // Generating with skipRefinementDetection=true produces a value that satisfies the
+      // structural constraints; the async outer parse handles the refinement checks.
+      if (ctx.asyncMode) return dispatch(schema, ctx, config, leaf, true);
       return dispatchRefinement(schema, ctx, config, leaf, true);
     }
 
     // v3: ZodEffects with effect.type === "refinement"
     if (isV3Refinement(schema)) {
+      // In async mode: unwrap to inner schema and generate structurally
+      if (ctx.asyncMode) return dispatch(getRefinementInner(schema), ctx, config, leaf, false);
       return dispatchRefinement(schema, ctx, config, leaf, false);
     }
   }
@@ -1098,6 +1105,18 @@ function dispatchRefinement(
   leaf: string | null,
   isV4Schema: boolean,
 ): unknown {
+  // Check for a user-provided generation hint first.
+  // withGenerate(schema, () => value) attaches a factory known to satisfy the refinement,
+  // avoiding the retry loop entirely for complex or hard-to-satisfy predicates.
+  const hint = getGenerationHint(schema);
+  if (hint !== undefined) {
+    const candidate = hint();
+    const result = schema.safeParse(candidate);
+    if (result.success) return result.data;
+    // Hint returned an invalid value — fall through to the generate-and-test loop.
+    // This can happen if the hint factory is wrong, or if the hint conflicts with other constraints.
+  }
+
   // For v4: dispatch on the original schema — custom checks are ignored by constraint builders.
   // For v3: unwrap the ZodEffects wrapper to get the inner type.
   const baseSchema = isV4Schema ? schema : getRefinementInner(schema);

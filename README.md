@@ -466,6 +466,63 @@ const result = mock(schema, { refinementRetries: 50 });
 
 If all retries are exhausted, `ZodForgeError [GENERATION_FAILED]` is thrown with a message suggesting a path-based generator as an escape hatch.
 
+### Refinement hints with `withGenerate()`
+
+For refinements that are hard to satisfy by brute-force (e.g. exact string matches, complex invariants), attach a generation hint directly to the schema using `withGenerate()`. The hint factory is called first; if the value passes the refinement it is used directly, bypassing the retry loop entirely.
+
+```typescript
+import { mock, withGenerate } from "zodmint";
+
+const schema = withGenerate(
+  z.string().refine((v) => v === "exact-match", "must equal exact-match"),
+  () => "exact-match", // hint factory: always returns a valid value
+);
+
+const result = mock(schema);
+// result → "exact-match" — no retries
+```
+
+`withGenerate()` stores the hint in a `WeakMap` and returns the same schema object, so it does not mutate or wrap the schema. If the hint factory returns an invalid value, zodmint falls back to the normal retry loop automatically.
+
+---
+
+## Async refinements with `mockAsync()`
+
+`mockAsync()` is the async counterpart to `mock()`. Use it when your schema contains `z.superRefine()` predicates that return Promises (async refinements):
+
+```typescript
+import { mockAsync } from "zodmint";
+
+const EvenNumber = z.number().int().min(0).max(100).superRefine(async (val, ctx) => {
+  await Promise.resolve(); // async check, e.g. a cache lookup
+  if (val % 2 !== 0) {
+    ctx.addIssue({ code: z.ZodIssueCode.custom, message: "must be even" });
+  }
+});
+
+const n = await mockAsync(EvenNumber, { refinementRetries: 50 });
+// n is a valid even integer
+```
+
+`mockAsync()` uses `schema.safeParseAsync()` internally and retries up to `refinementRetries` times (default: 10). It accepts the same options as `mock()` including `seed`, `overrides`, `mode`, and `generators`.
+
+For async refinements that check external state (DB uniqueness, API calls) that cannot be satisfied by random generation, combine `mockAsync()` with `withGenerate()`:
+
+```typescript
+import { mockAsync, withGenerate } from "zodmint";
+
+const UniqueEmail = withGenerate(
+  z.string().superRefine(async (val, ctx) => {
+    const taken = await db.emailExists(val);
+    if (taken) ctx.addIssue({ code: z.ZodIssueCode.custom, message: "email taken" });
+  }),
+  // Hint: always return a unique email — no retries needed
+  () => `user-${crypto.randomUUID()}@example.com`,
+);
+
+const email = await mockAsync(UniqueEmail);
+```
+
 ---
 
 ## Schema Descriptions as Semantic Hints
@@ -796,13 +853,13 @@ zodmint derives the data from the schema itself, so constraints are always satis
 
 ## Roadmap
 
-Remaining gaps for v2:
+Known gaps:
 
-**Transforms on overrides** — Overrides on schemas containing `.transform()` are not yet supported. This requires tracking the pre-transform domain, deferred to v2.
+**Scenario DSL** — A higher-level API for composing relational fixtures across multiple schemas is deliberately deferred until session/scope patterns are proven in the field. The session primitive (`createSession()`) is available today as the foundation.
 
-**Async refinements** — `z.superRefine()` returning a `Promise` is not yet supported. Synchronous refinements work today; async variants throw `UNSUPPORTED_SCHEMA`.
+**Compiled generators** — `compile(schema)` to pre-compute regex plans, generators, and semantic resolution for high-throughput scenarios. Not yet implemented.
 
-**`z.preprocess()` with non-primitive output** — Handled when the output is a primitive (treated like `z.coerce.*`), but arbitrary preprocess transforms with object or array outputs remain unsupported. Use a path-based generator as a workaround.
+**ORM/OpenAPI ingestion** — Only makes sense after relational generation matures.
 
 ---
 

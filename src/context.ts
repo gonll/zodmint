@@ -35,6 +35,13 @@ export interface GenerationContext {
   session?: Session;
   /** Paths to intentionally violate. When the current path matches, generateViolation() is used. */
   violatePaths: Set<string>;
+  /**
+   * When true, dispatch skips its internal sync refinement-check loops.
+   * Used by mockAsync() so that z.superRefine() async predicates do not throw
+   * "Encountered Promise during synchronous parse" (Zod v4). The outer
+   * runPipelineAsync() handles refinements via schema.safeParseAsync().
+   */
+  asyncMode?: boolean;
 }
 
 /** mulberry32 seeded PRNG */

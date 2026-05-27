@@ -589,10 +589,12 @@ export function generateString(
       const len = semanticValue.length;
       const minOk = c.min === undefined || len >= c.min;
       const maxOk = c.max === undefined || len <= c.max;
+      // c.length is an exact-length constraint (.length(n)) — must also match
+      const exactOk = c.length === undefined || len === c.length;
       const swOk = !c.startsWith || semanticValue.startsWith(c.startsWith);
       const ewOk = !c.endsWith || semanticValue.endsWith(c.endsWith);
       const inclOk = !c.includes || semanticValue.includes(c.includes);
-      if (minOk && maxOk && swOk && ewOk && inclOk) return semanticValue;
+      if (minOk && maxOk && exactOk && swOk && ewOk && inclOk) return semanticValue;
     }
   }
 

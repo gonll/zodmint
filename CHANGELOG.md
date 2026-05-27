@@ -4,11 +4,26 @@ All notable changes to zodmint are documented here. This project follows [Keep a
 
 ---
 
+## [2.0.0] - 2026-05-26
+
+### Added
+- **`mockAsync(schema, options?)`** — async counterpart to `mock()` for schemas containing `z.superRefine()` with async predicates. Uses `schema.safeParseAsync()` internally, retries up to `refinementRetries` times (default 10) when async predicates fail, and resolves with a fully valid `z.infer<S>` value.
+- **`withGenerate(schema, () => value)`** — attaches a generation hint to any schema. For schemas with refinements that are hard or impossible to satisfy by random generation (e.g. DB uniqueness checks), the hint factory is called first; if the value passes validation it is used directly, bypassing the retry loop. Works with both `mock()` and `mockAsync()`. The hint is stored in a `WeakMap` (zero GC overhead).
+- `mockAsync` and `withGenerate` are now exported from the main package.
+
+### Changed
+- `asyncMode` field added to `GenerationContext` (internal). When `true`, `dispatch()` skips internal synchronous refinement loops to prevent "Encountered Promise during synchronous parse" in Zod v4.
+
+---
+
 ## [1.9.0] - 2026-05-25
 
 ### Added
 - **Overrides on transform schemas** — `mock(schema, { overrides })` now works when the schema contains `.transform()`. Overrides are applied to the pre-transform input value; `safeParse` then runs the transform exactly once. The most common case (object transform adding computed fields) works intuitively. Type-changing transforms (e.g. `z.string().transform(s => parseInt(s))`) throw `INVALID_OVERRIDE` if the override is incompatible with the input type. Previously threw `UNSUPPORTED_SCHEMA`.
 - **`z.preprocess()` with non-primitive output** — `z.preprocess(fn, z.object({...}))` and similar schemas with complex output types (object, array, union, etc.) now generate valid values from the output schema directly. Previously threw `UNSUPPORTED_SCHEMA`.
+
+### Fixed
+- **Semantic inference ignoring `z.string().length(n)` exact-length constraint** — semantic values (e.g. a full country name for a field named `country`) were not checked against `c.length`, so they could pass through even when they violated an exact-length constraint. The semantic validity check now includes `exactOk = c.length === undefined || semanticValue.length === c.length`.
 
 ### Changed
 - Error semantics: passing an incompatible override to a transform schema now throws `INVALID_OVERRIDE` (not `UNSUPPORTED_SCHEMA`).

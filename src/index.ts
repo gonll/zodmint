@@ -1,5 +1,6 @@
 // Public API
-export { mock, mockList } from "./mock.js";
+export { mock, mockList, mockAsync } from "./mock.js";
+export { withGenerate } from "./hint.js";
 export { mockFactory } from "./factory.js";
 export type { MockFactory } from "./factory.js";
 export { configure, resetConfig, withConfig, definePlugin } from "./config.js";
