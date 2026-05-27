@@ -1020,8 +1020,11 @@ export interface DateConstraints {
 }
 
 export function generateDate(c: DateConstraints, rng: SeededRNG, path: string[]): Date {
-  const maxMs = c.max?.getTime() ?? ANCHOR_MS;
-  const minMs = c.min?.getTime() ?? (maxMs - 365 * 24 * 3600 * 1000);
+  // When min is provided but max is not, derive max from min instead of the
+  // fixed ANCHOR_MS — otherwise any min after 2024-01-01 triggers "min > max".
+  const ONE_YEAR_MS = 365 * 24 * 3600 * 1000;
+  const maxMs = c.max?.getTime() ?? (c.min ? c.min.getTime() + ONE_YEAR_MS : ANCHOR_MS);
+  const minMs = c.min?.getTime() ?? (maxMs - ONE_YEAR_MS);
 
   if (minMs > maxMs) {
     throw new ZodForgeError(

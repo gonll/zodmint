@@ -184,7 +184,17 @@ const DEFAULT_CONFIG: GlobalConfig = {
   refinementRetries: 10,
 };
 
-let globalConfig: GlobalConfig = { ...DEFAULT_CONFIG, matchers: [] };
+let globalConfig: GlobalConfig = { ...DEFAULT_CONFIG };
+
+// Tracks the currently installed plugins and explicit (non-plugin) matchers
+// separately so withConfig can preserve plugins even when overriding matchers.
+let _activePlugins: ZodmintPlugin[] = [];
+let _explicitMatchers: FieldMatcher[] = [];
+
+function buildMatchers(explicit: FieldMatcher[], plugins: ZodmintPlugin[]): FieldMatcher[] {
+  const pluginMatchers = plugins.flatMap(p => p.matchers.map(m => ({ ...m })));
+  return [...explicit, ...pluginMatchers];
+}
 
 /** Returns an immutable snapshot of the current global config */
 export function snapshotConfig(): Readonly<GlobalConfig> {
@@ -197,34 +207,48 @@ export function snapshotConfig(): Readonly<GlobalConfig> {
 }
 
 export function configure(options: ConfigureOptions): void {
-  // Expand plugin matchers (plugins come after explicit matchers, so explicit win)
-  const pluginMatchers = (options.plugins ?? []).flatMap(p => p.matchers.map(m => ({ ...m })));
-  const explicitMatchers = options.matchers
-    ? options.matchers.map(m => ({ ...m }))
-    : globalConfig.matchers;
+  // Update active plugins only when explicitly provided
+  if (options.plugins !== undefined) {
+    _activePlugins = options.plugins.map(p => ({ ...p, matchers: p.matchers.map(m => ({ ...m })) }));
+  }
+  // Update explicit matchers only when explicitly provided
+  if (options.matchers !== undefined) {
+    _explicitMatchers = options.matchers.map(m => ({ ...m }));
+  }
 
   globalConfig = {
     ...globalConfig,
     ...options,
-    matchers: [...explicitMatchers, ...pluginMatchers],
+    matchers: buildMatchers(_explicitMatchers, _activePlugins),
   };
 }
 
 export function resetConfig(): void {
   globalConfig = { ...DEFAULT_CONFIG, matchers: [] };
+  _activePlugins = [];
+  _explicitMatchers = [];
 }
 
 /**
  * Runs `fn` with a temporarily-scoped config, then restores the previous config.
+ * Plugin matchers installed before withConfig are always preserved inside fn()
+ * unless new plugins are explicitly passed.
+ *
  * Useful in tests or isolated contexts where you need a one-off config change
  * without polluting the global state.
  */
 export function withConfig<T>(options: Partial<GlobalConfig>, fn: () => T): T {
   const previous = snapshotConfig();
-  configure(options);
+  const prevPlugins = _activePlugins;
+  const prevExplicit = _explicitMatchers;
+
+  configure(options as ConfigureOptions);
   try {
     return fn();
   } finally {
+    // Restore both the config snapshot and the internal tracking state
     globalConfig = previous as GlobalConfig;
+    _activePlugins = prevPlugins;
+    _explicitMatchers = prevExplicit;
   }
 }

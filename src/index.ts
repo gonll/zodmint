@@ -19,3 +19,7 @@ export type { ZodForgeErrorCode } from "./errors.js";
 export type { GenerationMode } from "./context.js";
 export { createSession, seq } from "./session.js";
 export type { Session } from "./session.js";
+export { mockPin } from "./pin.js";
+export type { PinOptions } from "./pin.js";
+export { mockRelated, mockRelatedMany, mockRelatedThree } from "./related.js";
+export type { LinkSpec, ThreeWayLinkSpec } from "./related.js";

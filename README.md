@@ -855,8 +855,6 @@ zodmint derives the data from the schema itself, so constraints are always satis
 
 Known gaps:
 
-**Scenario DSL** — A higher-level API for composing relational fixtures across multiple schemas is deliberately deferred until session/scope patterns are proven in the field. The session primitive (`createSession()`) is available today as the foundation.
-
 **Compiled generators** — `compile(schema)` to pre-compute regex plans, generators, and semantic resolution for high-throughput scenarios. Not yet implemented.
 
 **ORM/OpenAPI ingestion** — Only makes sense after relational generation matures.
@@ -902,36 +900,169 @@ fc.assert(
 
 ### MSW (Mock Service Worker)
 
-zodmint pairs well with [MSW](https://mswjs.io/) for generating realistic, schema-valid responses in both browser and Node test environments. Your frontend can develop and test against real-looking data without a running backend.
+zodmint ships a first-class `zodmint/msw` sub-entry with a `mockHandler()` factory that wires a Zod schema directly to an MSW v2 route. Install MSW first:
 
-```typescript
-import { http, HttpResponse } from "msw";
-import { mock, mockList } from "zodmint";
-import { UserSchema, PostSchema } from "./schemas";
-
-export const handlers = [
-  http.get("/api/users", () => {
-    return HttpResponse.json(mockList(UserSchema, { count: 10 }));
-  }),
-
-  http.get("/api/users/:id", () => {
-    return HttpResponse.json(mock(UserSchema));
-  }),
-
-  http.get("/api/posts", () => {
-    return HttpResponse.json(mockList(PostSchema, { count: 5 }));
-  }),
-];
+```bash
+npm install msw
 ```
 
-Because zodmint guarantees `safeParse` validity, every response your MSW handler returns will satisfy the same schema your application uses to validate real API responses — no shape mismatches, no silent test passes that break in production.
+```typescript
+import { mockHandler, mockHandlers } from "zodmint/msw";
+import { UserSchema, PostSchema, ErrorSchema } from "./schemas";
 
-For stable responses across test runs, pass a `seed`:
+// Single handler
+export const handlers = [
+  mockHandler(UserSchema, "GET /api/users/:id"),
+  mockHandler(PostSchema, "POST /api/posts", { status: 201 }),
+  mockHandler(ErrorSchema, "GET /api/broken", { status: 500 }),
+];
+
+// Or batch with mockHandlers()
+export const handlers = mockHandlers([
+  { schema: UserSchema, route: "GET /api/users/:id" },
+  { schema: PostSchema, route: "POST /api/posts", status: 201 },
+  { schema: ErrorSchema, route: "GET /api/error", status: 500 },
+]);
+```
+
+`mockHandler` supports all `MockOptions` (`seed`, `overrides`, `mode`, etc.) plus HTTP-specific options:
 
 ```typescript
-http.get("/api/users/:id", ({ params }) => {
-  return HttpResponse.json(mock(UserSchema, { seed: Number(params.id) }));
-}),
+// Deterministic fixture — same data on every test run
+mockHandler(UserSchema, "GET /api/users/:id", { seed: 42 })
+
+// Simulate a slow endpoint to test loading states
+mockHandler(UserSchema, "GET /api/users/:id", { delay: 300 })
+
+// Simulate a permanently hanging request (e.g. spinner test)
+mockHandler(UserSchema, "GET /api/data", { delay: "infinite" })
+
+// Custom response headers
+mockHandler(UserSchema, "GET /api/users/:id", {
+  headers: { "X-Rate-Limit-Remaining": "0" },
+})
+```
+
+Because zodmint guarantees `safeParse` validity, every response your MSW handler returns will satisfy the same schema your application uses to validate real API responses -- no shape mismatches, no silent test passes that break in production.
+
+---
+
+### CLI — `zodmint gen`
+
+Generate fixture JSON from any Zod schema file directly from the terminal, without a test harness.
+
+```bash
+npx zodmint gen ./src/schemas/user.ts --schema UserSchema
+npx zodmint gen ./schemas/post.ts --count 5 --seed 42 --mode edge
+npx zodmint gen ./schemas/order.ts --schema OrderSchema --compact
+```
+
+**Flags:**
+
+| Flag | Default | Description |
+|---|---|---|
+| `--schema <name>` | auto-detected | Export name to use (required if multiple schemas found) |
+| `--count <n>` | `1` | Number of fixtures to generate |
+| `--seed <n>` | random | Seed for deterministic output |
+| `--mode` | `realistic` | `realistic` \| `edge` \| `random` |
+| `--compact` | off | Compact JSON output instead of pretty-printed |
+
+For TypeScript source files, pipe through `tsx`:
+
+```bash
+npx tsx ./node_modules/.bin/zodmint gen ./src/schemas/user.ts
+```
+
+Or add a script to `package.json`:
+
+```json
+{ "scripts": { "gen": "tsx ./node_modules/.bin/zodmint gen" } }
+```
+
+---
+
+### Snapshot Pinning — `mockPin`
+
+`mockPin` generates a value and writes it to a JSON fixture file the first time it runs. Subsequent calls read from the file, giving you a stable snapshot that is always valid and always typed.
+
+```typescript
+import { mockPin } from "zodmint";
+
+// First run: generates and writes __zodmint__/pin-42.json
+// Subsequent runs: reads from the file
+const user = mockPin(UserSchema, 42);
+```
+
+To regenerate a pin (after a schema change, for example):
+
+```typescript
+// Option A: per-call
+const user = mockPin(UserSchema, 42, { update: true });
+
+// Option B: environment variable (updates all pins in a run)
+// ZODMINT_UPDATE_PINS=1 vitest run
+```
+
+Custom location and label:
+
+```typescript
+const user = mockPin(UserSchema, 42, {
+  dir: "__fixtures__",  // directory to write files into
+  label: "user",        // file name prefix: __fixtures__/user-42.json
+});
+```
+
+Serialization handles the full zodmint type surface -- `Date`, `Set`, `Map`, and `bigint` round-trip correctly through JSON.
+
+---
+
+### Cross-Schema Consistency — `mockRelated`
+
+`mockRelated` generates two objects and links fields on the second to values from the first, enforcing referential integrity without manual wiring.
+
+```typescript
+import { mockRelated } from "zodmint";
+
+const [user, post] = mockRelated(
+  UserSchema,
+  PostSchema,
+  { userId: "id", authorEmail: "email" },
+);
+// post.userId === user.id  ✓
+// post.authorEmail === user.email  ✓
+```
+
+Use a mapper function for derived values:
+
+```typescript
+const [org, member] = mockRelated(
+  OrgSchema,
+  MemberSchema,
+  { orgId: "id", displayName: (org) => `Member of ${org.name}` },
+);
+```
+
+Generate multiple related pairs with `mockRelatedMany`:
+
+```typescript
+const pairs = mockRelatedMany(UserSchema, PostSchema, { userId: "id" }, 3);
+// pairs[0][1].userId === pairs[0][0].id  ✓
+// pairs[1][1].userId === pairs[1][0].id  ✓
+```
+
+Three-schema variant with `mockRelatedThree`:
+
+```typescript
+const [user, product, order] = mockRelatedThree(
+  UserSchema,
+  ProductSchema,
+  OrderSchema,
+  {
+    userId:    { from: "a", key: "id" },
+    productId: { from: "b", key: "id" },
+    totalCost: (_, product) => product.price * 2,
+  },
+);
 ```
 
 ---
@@ -945,3 +1076,4 @@ zodmint was built with an eye on the existing ecosystem. Three libraries were st
 - [**interface-forge**](https://www.npmjs.com/package/interface-forge) — the most ergonomic factory API in the space. Its `states`, `afterBuild`, and `extend()` patterns directly inspired the same features in `mockFactory()`. zodmint borrows the factory ergonomics without the Faker.js dependency or bundle size cost.
 
 zodmint's goal is the best of all three: constraint fidelity from first principles, deterministic seeding, and a factory API that s
+                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                  
