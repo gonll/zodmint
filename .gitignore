@@ -1,0 +1,47 @@
+# Dependencies
+node_modules/
+
+# Build output
+dist/
+
+# TypeScript
+*.tsbuildinfo
+
+# Environment
+.env
+.env.*
+!.env.example
+
+# Logs
+*.log
+npm-debug.log*
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Editor
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# Test coverage
+coverage/
+
+# Local playground
+playground/
+other/
+
+# Temp
+*.tmp
+*.temp
+*.mjs
+tsup.config.bundled_*
+vitest.config.ts.timestamp-*
+
+# Claude / AI tooling
+CLAUDE.md
+.claude/
+NEXT_STEPS.md
+ROADMAP.md

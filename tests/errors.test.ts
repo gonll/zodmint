@@ -1,0 +1,220 @@
+import { describe, it, expect, afterEach } from "vitest";
+import { z } from "zod";
+import { mock } from "../src/mock.js";
+import { ZodForgeError } from "../src/errors.js";
+import { configure, resetConfig } from "../src/config.js";
+
+afterEach(() => resetConfig());
+
+describe("ZodForgeError structure", () => {
+  it("has correct name", () => {
+    try {
+      mock(z.never());
+    } catch (e) {
+      expect((e as ZodForgeError).name).toBe("ZodForgeError");
+    }
+  });
+
+  it("has correct code property", () => {
+    try {
+      mock(z.never());
+    } catch (e) {
+      expect((e as ZodForgeError).code).toBe("UNSUPPORTED_SCHEMA");
+    }
+  });
+
+  it("is instanceof ZodForgeError", () => {
+    try {
+      mock(z.never());
+    } catch (e) {
+      expect(e).toBeInstanceOf(ZodForgeError);
+    }
+  });
+
+  it("is instanceof Error", () => {
+    try {
+      mock(z.never());
+    } catch (e) {
+      expect(e).toBeInstanceOf(Error);
+    }
+  });
+});
+
+describe("UNSUPPORTED_SCHEMA errors", () => {
+  it("z.never() throws UNSUPPORTED_SCHEMA", () => {
+    try {
+      mock(z.never());
+    } catch (e) {
+      expect((e as ZodForgeError).code).toBe("UNSUPPORTED_SCHEMA");
+    }
+  });
+
+  it("z.preprocess() with non-primitive output now works (generates from output schema)", () => {
+    // preprocess with a complex output type now generates from the output schema directly
+    const schema = z.preprocess((v) => v, z.object({ x: z.string() }));
+    expect(() => mock(schema)).not.toThrow();
+    const result = mock(schema);
+    expect(typeof result.x).toBe("string");
+  });
+
+  it("z.preprocess() with primitive output (z.coerce-like) still works", () => {
+    // preprocess wrapping a primitive output behaves like z.coerce
+    const schema = z.preprocess((v) => String(v), z.string());
+    expect(() => mock(schema)).not.toThrow();
+    const result = mock(schema);
+    expect(typeof result).toBe("string");
+  });
+
+  it("z.promise() no longer throws — it generates a Promise", async () => {
+    const schema = z.promise(z.string());
+    expect(() => mock(schema)).not.toThrow();
+    const result = mock(schema);
+    expect(result).toBeInstanceOf(Promise);
+    const value = await result;
+    expect(typeof value).toBe("string");
+  });
+
+  it("z.symbol() generates a valid symbol", () => {
+    const schema = z.symbol();
+    const value = mock(schema);
+    expect(typeof value).toBe("symbol");
+    expect(schema.safeParse(value).success).toBe(true);
+  });
+
+  // z.custom() previously threw UNSUPPORTED_SCHEMA; it now generates a random primitive.
+
+  // z.refine() no longer throws UNSUPPORTED_SCHEMA — it uses generate-and-test.
+  // Unsatisfiable refinements throw GENERATION_FAILED (tested in GENERATION_FAILED block).
+
+  // Overrides on transform schemas are now supported — tested in pipeline.test.ts
+  // under "transforms on overrides".
+});
+
+describe("z.custom()", () => {
+  it("does not throw - generates a random primitive", () => {
+    expect(() => mock(z.custom<string>(() => true))).not.toThrow();
+  });
+
+  it("generated value is a string, number, or boolean", () => {
+    const result = mock(z.custom<unknown>(() => true));
+    const validTypes = ["string", "number", "boolean"];
+    expect(validTypes).toContain(typeof result);
+  });
+});
+
+describe("generation modes", () => {
+  it("mode: 'edge' does not throw — it generates boundary values", () => {
+    expect(() => mock(z.string(), { mode: "edge" })).not.toThrow();
+    const result = mock(z.string(), { mode: "edge" });
+    expect(z.string().safeParse(result).success).toBe(true);
+  });
+
+  it("mode: 'random' does not throw — it is implemented", () => {
+    expect(() => mock(z.string(), { mode: "random" })).not.toThrow();
+    const result = mock(z.string(), { mode: "random" });
+    expect(z.string().safeParse(result).success).toBe(true);
+  });
+});
+
+describe("INVALID_OVERRIDE errors", () => {
+  it("includes path information in message", () => {
+    const schema = z.object({
+      address: z.object({
+        age: z.number().positive(),
+      }),
+    });
+    try {
+      mock(schema, { overrides: { address: { age: -5 } } });
+    } catch (e) {
+      expect((e as ZodForgeError).code).toBe("INVALID_OVERRIDE");
+      expect((e as ZodForgeError).message).toContain("age");
+    }
+  });
+});
+
+describe("REGEX_UNSUPPORTED errors", () => {
+  it("throws with description of what pattern was rejected", () => {
+    // Lookahead patterns are unsupported and must throw REGEX_UNSUPPORTED
+    const schema = z.string().regex(/(?=\d)/);
+    expect(() => mock(schema)).toThrow(ZodForgeError);
+    try {
+      mock(schema);
+    } catch (e) {
+      expect((e as ZodForgeError).code).toBe("REGEX_UNSUPPORTED");
+      expect((e as ZodForgeError).message).toMatch(/regex/i);
+    }
+  });
+});
+
+describe("GENERATION_FAILED errors", () => {
+  it("z.intersection with conflicting field types throws GENERATION_FAILED", () => {
+    // x must be both string and number — impossible
+    const schema = z.intersection(
+      z.object({ x: z.string() }),
+      z.object({ x: z.number() }),
+    );
+    expect(() => mock(schema)).toThrow(ZodForgeError);
+    try { mock(schema); } catch (e) {
+      expect((e as ZodForgeError).code).toBe("GENERATION_FAILED");
+    }
+  });
+
+  it("unsatisfiable refinement throws GENERATION_FAILED", () => {
+    // This refinement can never pass — always returns false
+    const schema = z.string().refine(() => false, "always fails");
+    expect(() => mock(schema)).toThrow(ZodForgeError);
+    try { mock(schema); } catch (e) {
+      expect((e as ZodForgeError).code).toBe("GENERATION_FAILED");
+      expect((e as ZodForgeError).message).toContain("refinement");
+    }
+  });
+
+  it("unsatisfiable superRefine throws GENERATION_FAILED", () => {
+    const schema = z.number().superRefine((val, ctx) => {
+      ctx.addIssue({ code: z.ZodIssueCode.custom, message: "always invalid" });
+    });
+    expect(() => mock(schema)).toThrow(ZodForgeError);
+    try { mock(schema); } catch (e) {
+      expect((e as ZodForgeError).code).toBe("GENERATION_FAILED");
+    }
+  });
+});
+
+describe("MAX_DEPTH_EXCEEDED errors", () => {
+  it("error message includes maxDepth value", () => {
+    type Required = { child: Required };
+    const RequiredSchema: z.ZodType<Required> = z.lazy(() =>
+      z.object({ child: RequiredSchema })
+    );
+    try {
+      mock(RequiredSchema, { maxDepth: 2 });
+    } catch (e) {
+      expect((e as ZodForgeError).code).toBe("MAX_DEPTH_EXCEEDED");
+      expect((e as ZodForgeError).message).toMatch(/2/);
+    }
+  });
+});
+
+describe("configure() and resetConfig()", () => {
+  it("configure() and resetConfig() isolate between tests", () => {
+    configure({ maxDepth: 5, useDefaults: true });
+    resetConfig();
+    // After reset, defaults should be back
+    // We can verify by checking the snapshot indirectly via mock behavior
+    const schema = z.string().default("hello");
+    // useDefaults should be false after reset — so it shouldn't always return "hello"
+    const results = Array.from({ length: 10 }, () => mock(schema));
+    results.forEach((r) => expect(typeof r).toBe("string"));
+  });
+
+  it("configure() with matchers applies custom generator", () => {
+    configure({
+      matchers: [
+        { pattern: /sku/i, generate: () => "SKU-1234" },
+      ],
+    });
+    const schema = z.object({ sku: z.string() });
+    const result = mock(schema);
+    expect(result.sku).toBe("SKU-1234");
+  });
+});

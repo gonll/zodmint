@@ -1,0 +1,87 @@
+{
+  "name": "zodmint",
+  "version": "2.1.0",
+  "description": "TypeScript-first schema-valid test fixture generator for Zod schemas",
+  "type": "module",
+  "main": "./dist/index.cjs",
+  "module": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js",
+      "require": "./dist/index.cjs"
+    },
+    "./testing": {
+      "types": "./dist/testing.d.ts",
+      "import": "./dist/testing.js",
+      "require": "./dist/testing.cjs"
+    },
+    "./fast-check": {
+      "types": "./dist/fast-check.d.ts",
+      "import": "./dist/fast-check.js",
+      "require": "./dist/fast-check.cjs"
+    }
+  },
+  "files": [
+    "dist",
+    "README.md",
+    "CHANGELOG.md"
+  ],
+  "sideEffects": false,
+  "engines": {
+    "node": ">=18"
+  },
+  "scripts": {
+    "clean": "rm -f ./*.mjs",
+    "prebuild": "npm run clean",
+    "build": "tsup",
+    "pretest": "npm run clean",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "lint": "tsc --noEmit"
+  },
+  "peerDependencies": {
+    "zod": ">=3.23.0",
+    "fast-check": ">=3.0.0"
+  },
+  "devDependencies": {
+    "@types/node": "^20.0.0",
+    "fast-check": "^3.22.0",
+    "tsup": "^8.0.0",
+    "typescript": "^5.4.0",
+    "vitest": "^1.6.0",
+    "zod": "^4.4.3"
+  },
+  "keywords": [
+    "zod",
+    "mock",
+    "fixture",
+    "factory",
+    "testing",
+    "typescript",
+    "schema",
+    "generator",
+    "test-data",
+    "mock-data",
+    "fixtures",
+    "zod-mock",
+    "zod-faker",
+    "test-fixtures",
+    "fake-data",
+    "data-generator"
+  ],
+  "license": "MIT",
+  "author": {
+    "name": "Gonzalo",
+    "url": "https://github.com/gonll"
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/gonll/zodmint.git"
+  },
+  "homepage": "https://github.com/gonll/zodmint#readme",
+  "bugs": {
+    "url": "https://github.com/gonll/zodmint/issues"
+  }
+}

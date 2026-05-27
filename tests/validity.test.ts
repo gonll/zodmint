@@ -1,0 +1,362 @@
+/**
+ * Core validity contract: schema.safeParse(mock(schema)).success === true
+ * for a comprehensive set of schemas.
+ */
+import { describe, it, expect } from "vitest";
+import { z } from "zod";
+import { mock } from "../src/mock.js";
+import { ZodForgeError } from "../src/errors.js";
+
+function valid<S extends z.ZodTypeAny>(schema: S, times = 10) {
+  for (let i = 0; i < times; i++) {
+    const value = mock(schema);
+    const result = schema.safeParse(value);
+    if (!result.success) {
+      throw new Error(
+        `Validity contract violated.\nValue: ${JSON.stringify(value, null, 2)}\nErrors: ${JSON.stringify(result.error.errors, null, 2)}`
+      );
+    }
+  }
+}
+
+describe("validity contract", () => {
+  it("z.string()", () => valid(z.string()));
+  it("z.string().min(5)", () => valid(z.string().min(5)));
+  it("z.string().max(10)", () => valid(z.string().max(10)));
+  it("z.string().min(3).max(8)", () => valid(z.string().min(3).max(8)));
+  it("z.string().email()", () => valid(z.string().email()));
+  it("z.string().url()", () => valid(z.string().url()));
+  it("z.string().uuid()", () => valid(z.string().uuid()));
+  it("z.string().startsWith('foo')", () => valid(z.string().startsWith("foo")));
+  it("z.string().endsWith('bar')", () => valid(z.string().endsWith("bar")));
+  it("z.string().length(7)", () => valid(z.string().length(7)));
+
+  it("z.number()", () => valid(z.number()));
+  it("z.number().int()", () => valid(z.number().int()));
+  it("z.number().min(5).max(10)", () => valid(z.number().min(5).max(10)));
+  it("z.number().positive()", () => valid(z.number().positive()));
+  it("z.number().negative()", () => valid(z.number().negative()));
+  it("z.number().multipleOf(3)", () => valid(z.number().multipleOf(3)));
+  it("z.number().int().min(0).max(100)", () => valid(z.number().int().min(0).max(100)));
+
+  it("z.bigint()", () => valid(z.bigint()));
+  it("z.bigint().min(0n)", () => valid(z.bigint().min(0n)));
+  it("z.bigint().max(100n)", () => valid(z.bigint().max(100n)));
+
+  it("z.boolean()", () => valid(z.boolean()));
+  it("z.date()", () => valid(z.date()));
+  it("z.date().min(new Date('2020-01-01'))", () => valid(z.date().min(new Date("2020-01-01"))));
+  it("z.date().max(new Date())", () => valid(z.date().max(new Date())));
+
+  it("z.enum(['a','b','c'])", () => valid(z.enum(["a", "b", "c"])));
+  it("z.literal('hello')", () => valid(z.literal("hello")));
+  it("z.literal(42)", () => valid(z.literal(42)));
+
+  it("z.array(z.string())", () => valid(z.array(z.string())));
+  it("z.array(z.number()).min(2).max(4)", () => valid(z.array(z.number()).min(2).max(4)));
+  it("z.array(z.string()).length(3)", () => valid(z.array(z.string()).length(3)));
+
+  it("z.tuple([z.string(), z.number()])", () => valid(z.tuple([z.string(), z.number()])));
+
+  it("z.tuple with rest element is valid", () => {
+    const schema = z.tuple([z.string(), z.number()]).rest(z.boolean());
+    const result = mock(schema);
+    expect(schema.safeParse(result).success).toBe(true);
+    expect(typeof result[0]).toBe("string");
+    expect(typeof result[1]).toBe("number");
+    // rest elements (if any) should be booleans
+    result.slice(2).forEach(v => expect(typeof v).toBe("boolean"));
+  });
+
+  it("z.object({ name: z.string(), age: z.number() })", () =>
+    valid(z.object({ name: z.string(), age: z.number() })));
+
+  it("z.object with nested object", () =>
+    valid(z.object({
+      user: z.object({
+        name: z.string(),
+        email: z.string().email(),
+        age: z.number().int().min(0).max(120),
+      }),
+      active: z.boolean(),
+    })));
+
+  it("z.optional(z.string())", () => valid(z.optional(z.string())));
+  it("z.nullable(z.string())", () => valid(z.nullable(z.string())));
+  it("z.string().optional()", () => valid(z.string().optional()));
+  it("z.number().nullable()", () => valid(z.number().nullable()));
+
+  it("z.union([z.string(), z.number()])", () => valid(z.union([z.string(), z.number()])));
+  it("z.discriminatedUnion", () =>
+    valid(z.discriminatedUnion("type", [
+      z.object({ type: z.literal("a"), value: z.string() }),
+      z.object({ type: z.literal("b"), count: z.number() }),
+    ])));
+
+  it("z.record(z.string(), z.number())", () => valid(z.record(z.string(), z.number())));
+
+  it("z.intersection of objects", () =>
+    valid(z.intersection(
+      z.object({ a: z.string() }),
+      z.object({ b: z.number() }),
+    )));
+
+  it("z.string().default('hello')", () => valid(z.string().default("hello")));
+  it("z.number().catch(0)", () => valid(z.number().catch(0)));
+
+  it("z.unknown()", () => valid(z.unknown()));
+  it("z.any()", () => valid(z.any()));
+
+  it("z.coerce.string()", () => valid(z.coerce.string()));
+  it("z.coerce.number()", () => valid(z.coerce.number()));
+  it("z.coerce.boolean()", () => valid(z.coerce.boolean()));
+
+  it("z.object().strict()", () =>
+    valid(z.object({ x: z.string() }).strict()));
+
+  it("z.object(...).readonly()", () =>
+    valid(z.object({ id: z.string(), val: z.number() }).readonly()));
+
+  it("z.string().brand<'ID'>()", () => valid(z.string().brand<"ID">()));
+});
+
+describe("validity contract — additional types", () => {
+  it("z.set(z.string())", () => valid(z.set(z.string())));
+
+  it("z.set(z.number().int().positive())", () => valid(z.set(z.number().int().positive())));
+
+  it("z.map(z.string(), z.number())", () => valid(z.map(z.string(), z.number())));
+
+  it("z.map(z.string().uuid(), z.boolean())", () => valid(z.map(z.string().uuid(), z.boolean())));
+
+  it("z.nan() — mock returns NaN and safeParse succeeds", () => {
+    const schema = z.nan();
+    const result = mock(schema);
+    expect(Number.isNaN(result)).toBe(true);
+    expect(schema.safeParse(NaN).success).toBe(true);
+  });
+
+  it("z.coerce.bigint()", () => valid(z.coerce.bigint()));
+
+  it("z.coerce.date()", () => valid(z.coerce.date()));
+
+  it("z.set(z.string()).min(2).max(4) — size is within bounds", () => {
+    for (let i = 0; i < 10; i++) {
+      const schema = z.set(z.string()).min(2).max(4);
+      const result = mock(schema);
+      expect(schema.safeParse(result).success).toBe(true);
+      expect(result.size).toBeGreaterThanOrEqual(2);
+      expect(result.size).toBeLessThanOrEqual(4);
+    }
+  });
+
+  it("z.map(z.string(), z.number()).min(2) — size is at least 2", () => {
+    for (let i = 0; i < 10; i++) {
+      const schema = z.map(z.string(), z.number()).min(2);
+      const result = mock(schema);
+      expect(schema.safeParse(result).success).toBe(true);
+      expect(result.size).toBeGreaterThanOrEqual(2);
+    }
+  });
+});
+
+describe("validity contract — z.refine() and z.superRefine()", () => {
+  it("z.string().refine() with satisfiable condition", () => {
+    const schema = z.string().refine((v) => v.length > 0, "must be non-empty");
+    const result = mock(schema);
+    expect(schema.safeParse(result).success).toBe(true);
+  });
+
+  it("z.number().refine() with satisfiable condition", () => {
+    const schema = z.number().refine((v) => v > 0, "must be positive");
+    const result = mock(schema);
+    expect(result).toBeGreaterThan(0);
+    expect(schema.safeParse(result).success).toBe(true);
+  });
+
+  it("z.object with refine on fields", () => {
+    const schema = z.object({
+      password: z.string().min(8).refine((v) => /[A-Z]/.test(v), "needs uppercase"),
+      age: z.number().int().min(0).max(120).refine((v) => v >= 18, "must be adult"),
+    });
+    const result = mock(schema);
+    expect(schema.safeParse(result).success).toBe(true);
+  });
+
+  it("z.string().superRefine() with satisfiable condition", () => {
+    const schema = z.string().superRefine((v, ctx) => {
+      if (v.length === 0) {
+        ctx.addIssue({ code: z.ZodIssueCode.custom, message: "must not be empty" });
+      }
+    });
+    const result = mock(schema);
+    expect(schema.safeParse(result).success).toBe(true);
+  });
+
+  it("z.number().int().refine() with range condition", () => {
+    const schema = z.number().int().refine((v) => v >= 0 && v <= 100, "must be 0–100");
+    const result = mock(schema);
+    expect(schema.safeParse(result).success).toBe(true);
+    expect(Number.isInteger(result)).toBe(true);
+  });
+
+  it("chained refinements are all satisfied", () => {
+    const schema = z.string()
+      .refine((v) => v.length >= 3, "at least 3 chars")
+      .refine((v) => v.length <= 100, "at most 100 chars");
+    const result = mock(schema);
+    expect(schema.safeParse(result).success).toBe(true);
+  });
+});
+
+describe("z.object().catchall()", () => {
+  it("generates valid object with catchall number values", () => {
+    const schema = z.object({ name: z.string() }).catchall(z.number());
+    const result = mock(schema);
+    expect(schema.safeParse(result).success).toBe(true);
+    expect(typeof result.name).toBe("string");
+    // Extra keys should all be numbers
+    Object.entries(result).forEach(([k, v]) => {
+      if (k !== "name") expect(typeof v).toBe("number");
+    });
+  });
+
+  it("catchall with edge mode generates no extra keys", () => {
+    const schema = z.object({ id: z.string() }).catchall(z.boolean());
+    const result = mock(schema, { mode: "edge" });
+    expect(schema.safeParse(result).success).toBe(true);
+    expect(Object.keys(result)).toEqual(["id"]);
+  });
+
+  it("catchall with complex value schema", () => {
+    const schema = z.object({ type: z.literal("widget") }).catchall(
+      z.object({ value: z.number() })
+    );
+    const result = mock(schema);
+    expect(schema.safeParse(result).success).toBe(true);
+  });
+});
+
+describe("validity contract — z.promise()", () => {
+  it("z.promise() generates a Promise", async () => {
+    const schema = z.promise(z.string().email());
+    const result = mock(schema);
+    expect(result).toBeInstanceOf(Promise);
+    const value = await result;
+    expect(z.string().email().safeParse(value).success).toBe(true);
+  });
+
+  it("z.promise(z.object()) generates a valid Promise", async () => {
+    const schema = z.promise(z.object({ id: z.string().uuid() }));
+    const result = mock(schema);
+    expect(result).toBeInstanceOf(Promise);
+    const value = await result;
+    expect(value.id).toMatch(/^[0-9a-f-]{36}$/i);
+  });
+});
+
+describe("validity contract — numeric nativeEnum", () => {
+  enum Direction {
+    Up = 0,
+    Down = 1,
+    Left = 2,
+    Right = 3,
+  }
+
+  enum Status {
+    Active = "active",
+    Inactive = "inactive",
+  }
+
+  it("numeric nativeEnum generates valid numeric values", () => {
+    const schema = z.nativeEnum(Direction);
+    for (let i = 0; i < 20; i++) {
+      const value = mock(schema);
+      const result = schema.safeParse(value);
+      expect(result.success).toBe(true);
+      // Must be a numeric value, not a string key name
+      expect(typeof value).toBe("number");
+      expect([0, 1, 2, 3]).toContain(value);
+    }
+  });
+
+  it("string nativeEnum generates valid string values", () => {
+    const schema = z.nativeEnum(Status);
+    for (let i = 0; i < 10; i++) {
+      const value = mock(schema);
+      expect(schema.safeParse(value).success).toBe(true);
+      expect(typeof value).toBe("string");
+    }
+  });
+});
+
+describe("validity contract — z.string().includes()", () => {
+  it("includes constraint: generated string contains required substring", () => {
+    const schema = z.string().includes("foo");
+    for (let i = 0; i < 20; i++) {
+      const value = mock(schema);
+      expect(schema.safeParse(value).success).toBe(true);
+      expect(value).toContain("foo");
+    }
+  });
+
+  it("includes + min length: both satisfied", () => {
+    const schema = z.string().includes("bar").min(10);
+    for (let i = 0; i < 10; i++) {
+      const value = mock(schema);
+      expect(schema.safeParse(value).success).toBe(true);
+      expect(value).toContain("bar");
+      expect(value.length).toBeGreaterThanOrEqual(10);
+    }
+  });
+});
+
+describe("validity contract — z.bigint() constraints", () => {
+  it("z.bigint().positive() generates a value > 0n", () => {
+    const schema = z.bigint().positive();
+    for (let i = 0; i < 20; i++) {
+      const value = mock(schema);
+      expect(schema.safeParse(value).success).toBe(true);
+      expect(value > 0n).toBe(true);
+    }
+  });
+
+  it("z.bigint().negative() generates a value < 0n", () => {
+    const schema = z.bigint().negative();
+    for (let i = 0; i < 20; i++) {
+      const value = mock(schema);
+      expect(schema.safeParse(value).success).toBe(true);
+      expect(value < 0n).toBe(true);
+    }
+  });
+
+  it("z.bigint().nonnegative() generates a value >= 0n", () => {
+    const schema = z.bigint().nonnegative();
+    for (let i = 0; i < 20; i++) {
+      const value = mock(schema);
+      expect(schema.safeParse(value).success).toBe(true);
+      expect(value >= 0n).toBe(true);
+    }
+  });
+
+  it("z.bigint().nonpositive() generates a value <= 0n", () => {
+    const schema = z.bigint().nonpositive();
+    for (let i = 0; i < 20; i++) {
+      const value = mock(schema);
+      expect(schema.safeParse(value).success).toBe(true);
+      expect(value <= 0n).toBe(true);
+    }
+  });
+});
+
+describe("validity contract — z.function() throws UNSUPPORTED_SCHEMA", () => {
+  it("z.function() throws ZodForgeError with UNSUPPORTED_SCHEMA", () => {
+    expect(() => mock(z.function())).toThrow(ZodForgeError);
+    try {
+      mock(z.function());
+    } catch (e) {
+      expect(e).toBeInstanceOf(ZodForgeError);
+      expect((e as ZodForgeError).code).toBe("UNSUPPORTED_SCHEMA");
+    }
+  });
+});
