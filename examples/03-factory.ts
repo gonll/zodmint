@@ -43,3 +43,4 @@ const guestFactory = userFactory.extend({
 
 console.log("Guest:", guestFactory());
 console.log("Original still works:", userFactory({ states: "admin" }));
+
