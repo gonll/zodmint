@@ -1,6 +1,6 @@
 import { z } from "zod";
 import type { MockFactoryOptions, MockFactoryCallOptions } from "./config.js";
-import { mock } from "./mock.js";
+import { mock, mockAsync } from "./mock.js";
 import { deepMerge, type DeepPartial } from "./merge.js";
 import { ZodForgeError } from "./errors.js";
 
@@ -9,13 +9,28 @@ function mergePartials<T>(a: unknown, b: unknown): DeepPartial<T> {
   return deepMerge(a as T, b as DeepPartial<T>) as DeepPartial<T>;
 }
 
+/** Returns undefined when the object has no own keys, so pipelines treat it as "no overrides". */
+function emptyToUndefined<T>(obj: DeepPartial<T>): DeepPartial<T> | undefined {
+  return Object.keys(obj as object).length === 0 ? undefined : obj;
+}
+
 /**
  * A typed factory returned by `mockFactory()`.
- * Callable directly, and exposes `.extend()` for deriving new factories.
+ * Callable directly, and exposes `.async()` and `.extend()`.
  */
 export type MockFactory<S extends z.ZodTypeAny> = {
-  /** Generate a single instance, optionally activating states or providing overrides. */
+  /** Generate a single instance synchronously. `afterBuild` must be synchronous. */
   (callOptions?: MockFactoryCallOptions<S>): z.infer<S>;
+  /**
+   * Generate a single instance asynchronously. Use this when the schema contains
+   * async refinements (`z.superRefine()` returning a `Promise`) or when `afterBuild`
+   * is async (returns `Promise<z.infer<S>>`).
+   *
+   * @example
+   * const user = await userFactory.async();
+   * const admin = await userFactory.async({ states: "admin" });
+   */
+  async(callOptions?: MockFactoryCallOptions<S>): Promise<z.infer<S>>;
   /**
    * Derive a new factory by merging additional options onto this one.
    * - `overrides` are deep-merged (extend wins).
@@ -64,29 +79,92 @@ function createFactory<S extends z.ZodTypeAny>(
     const finalOptions = {
       ...baseCallOpts,
       ...restCallOpts,
-      overrides: mergedOverrides,
+      overrides: emptyToUndefined(mergedOverrides),
     };
 
     // 3. Generate
     let result = mock(schema, finalOptions);
 
-    // 4. afterBuild hook
+    // 4. afterBuild hook — must be synchronous when called via factory()
     if (options.afterBuild) {
-      result = options.afterBuild(result);
+      const built = options.afterBuild(result);
+      if (built instanceof Promise) {
+        throw new ZodForgeError(
+          "afterBuild returned a Promise but was called via the synchronous factory(). " +
+            "Use factory.async() to support async afterBuild hooks.",
+          "GENERATION_FAILED",
+        );
+      }
+      result = built;
     }
 
     return result;
   }
 
+  factory.async = async function (callOptions?: MockFactoryCallOptions<S>): Promise<z.infer<S>> {
+    // 1. Resolve state overrides (same logic as sync)
+    let stateOverrides: DeepPartial<z.infer<S>> = {} as DeepPartial<z.infer<S>>;
+    if (callOptions?.states !== undefined) {
+      const stateNames = Array.isArray(callOptions.states)
+        ? callOptions.states
+        : [callOptions.states];
+
+      for (const name of stateNames) {
+        const stateData = options.states?.[name];
+        if (stateData === undefined) {
+          throw new ZodForgeError(
+            `Unknown factory state: "${name}". Available states: ${
+              Object.keys(options.states ?? {}).join(", ") || "(none)"
+            }`,
+            "INVALID_OVERRIDE",
+          );
+        }
+        stateOverrides = mergePartials<z.infer<S>>(stateOverrides, stateData);
+      }
+    }
+
+    // 2. Merge options
+    const { states: _s, afterBuild: _ab, overrides: baseOverrides, ...baseCallOpts } = options;
+    const { states: _cs, overrides: callOverrides, ...restCallOpts } = callOptions ?? {};
+
+    const mergedOverrides = mergePartials<z.infer<S>>(
+      mergePartials<z.infer<S>>(baseOverrides ?? {}, stateOverrides),
+      callOverrides ?? {},
+    );
+
+    const finalOptions = {
+      ...baseCallOpts,
+      ...restCallOpts,
+      overrides: emptyToUndefined(mergedOverrides),
+    };
+
+    // 3. Generate asynchronously
+    let result = await mockAsync(schema, finalOptions);
+
+    // 4. afterBuild hook — awaited so async hooks work
+    if (options.afterBuild) {
+      result = await options.afterBuild(result);
+    }
+
+    return result;
+  };
+
   factory.extend = function (
     extOptions: Partial<MockFactoryOptions<S>>,
   ): MockFactory<S> {
-    // Chain afterBuild: base runs first, then extend
-    let chainedAfterBuild: ((v: z.infer<S>) => z.infer<S>) | undefined;
+    // Chain afterBuild: base runs first, then extend. Either hook may be async.
+    // The chain itself is only async if the base hook returns a Promise.
+    let chainedAfterBuild: ((v: z.infer<S>) => z.infer<S> | Promise<z.infer<S>>) | undefined;
     if (options.afterBuild && extOptions.afterBuild) {
       const baseHook = options.afterBuild;
       const extHook = extOptions.afterBuild;
-      chainedAfterBuild = (v) => extHook(baseHook(v));
+      chainedAfterBuild = (v: z.infer<S>) => {
+        const baseResult = baseHook(v);
+        if (baseResult instanceof Promise) {
+          return baseResult.then((resolved) => extHook(resolved));
+        }
+        return extHook(baseResult as z.infer<S>);
+      };
     } else {
       chainedAfterBuild = extOptions.afterBuild ?? options.afterBuild;
     }

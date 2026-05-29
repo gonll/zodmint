@@ -165,7 +165,40 @@ const post = postFactory();
 // post.slug === post.title.toLowerCase().replace(/\s+/g, "-")
 ```
 
-The hook receives the fully-generated, override-merged value and must return the same type.
+The hook receives the fully-generated, override-merged value and must return the same type. When using `factory.async()` (see below), `afterBuild` may also return a `Promise`.
+
+#### `factory.async(callOptions?)`
+
+The async counterpart to calling the factory directly. Use this when:
+
+- the schema contains async `z.superRefine()` refinements, or
+- `afterBuild` needs to perform async work (database writes, ID hydration, API calls).
+
+```typescript
+// Schema with async refinement
+const UniqueEmail = z.object({
+  email: z.string().email().superRefine(async (v, ctx) => {
+    if (await db.users.exists({ email: v }))
+      ctx.addIssue({ code: "custom", message: "taken" });
+  }),
+});
+
+const emailFactory = mockFactory(UniqueEmail);
+const user = await emailFactory.async(); // uses mockAsync() internally
+
+// Async afterBuild — enriches the generated value after creation
+const userFactory = mockFactory(UserSchema, {
+  afterBuild: async (user) => {
+    const saved = await db.users.create(user);
+    return { ...user, id: saved.id };
+  },
+});
+
+const persisted = await userFactory.async();
+// persisted.id comes from the database
+```
+
+The sync `factory()` call is unchanged — if `afterBuild` returns a `Promise` but you call the factory synchronously, a `ZodForgeError [GENERATION_FAILED]` is thrown with a clear message pointing you to `.async()`.
 
 #### `factory.extend(options)`
 

@@ -302,3 +302,79 @@ describe("mockFactory() — extend()", () => {
     expect(UserSchema.safeParse(user).success).toBe(true);
   });
 });
+
+// ─── Async factory ───────────────────────────────────────────────────────────
+
+describe("factory.async()", () => {
+  it("resolves to a valid object", async () => {
+    const factory = mockFactory(UserSchema);
+    const user = await factory.async();
+    expect(UserSchema.safeParse(user).success).toBe(true);
+  });
+
+  it("respects overrides", async () => {
+    const factory = mockFactory(UserSchema);
+    const user = await factory.async({ overrides: { role: "admin" } });
+    expect(user.role).toBe("admin");
+  });
+
+  it("applies states", async () => {
+    const factory = mockFactory(UserSchema, {
+      states: { admin: { role: "admin" } },
+    });
+    const user = await factory.async({ states: "admin" });
+    expect(user.role).toBe("admin");
+  });
+
+  it("runs sync afterBuild", async () => {
+    const factory = mockFactory(UserSchema, {
+      afterBuild: (u) => ({ ...u, name: "sync-hook" }),
+    });
+    const user = await factory.async();
+    expect(user.name).toBe("sync-hook");
+  });
+
+  it("awaits async afterBuild", async () => {
+    const factory = mockFactory(UserSchema, {
+      afterBuild: async (u) => ({ ...u, name: "async-hook" }),
+    });
+    const user = await factory.async();
+    expect(user.name).toBe("async-hook");
+  });
+
+  it("works with schemas containing async refinements", async () => {
+    const EvenAge = z.object({
+      name: z.string(),
+      age: z.number().int().min(18).max(98).superRefine(async (n, ctx) => {
+        if (n % 2 !== 0) ctx.addIssue({ code: "custom", message: "must be even" });
+      }),
+    });
+    const factory = mockFactory(EvenAge);
+    const result = await factory.async();
+    expect(result.age % 2).toBe(0);
+  });
+
+  it("throws a friendly error when sync factory() is called with async afterBuild", () => {
+    const factory = mockFactory(UserSchema, {
+      afterBuild: async (u) => u,
+    });
+    expect(() => factory()).toThrow(ZodForgeError);
+    expect(() => factory()).toThrow("factory.async()");
+  });
+
+  it("chained async afterBuild via extend works", async () => {
+    const base = mockFactory(UserSchema, {
+      afterBuild: async (u) => ({ ...u, name: "base" }),
+    });
+    const derived = base.extend({
+      afterBuild: async (u) => ({ ...u, name: `${u.name}-ext` }),
+    });
+    const user = await derived.async();
+    expect(user.name).toBe("base-ext");
+  });
+
+  it("unknown state throws ZodForgeError", async () => {
+    const factory = mockFactory(UserSchema, { states: { admin: { role: "admin" } } });
+    await expect(factory.async({ states: "nonexistent" })).rejects.toThrow(ZodForgeError);
+  });
+});

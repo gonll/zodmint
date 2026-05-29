@@ -109,12 +109,25 @@ export interface MockFactoryOptions<S extends z.ZodTypeAny = z.ZodTypeAny>
    * Post-generation hook. Called with the fully-generated (and override-merged)
    * value before it is returned. Ideal for derived fields or cross-field logic.
    *
+   * When used with the sync `factory()` call, this must return `z.infer<S>` synchronously.
+   * When used with `factory.async()`, it may also return `Promise<z.infer<S>>`.
+   *
    * @example
    * const factory = mockFactory(PostSchema, {
    *   afterBuild: (post) => ({ ...post, slug: post.title.toLowerCase().replace(/ /g, "-") }),
    * });
+   *
+   * @example
+   * // Async afterBuild — use factory.async()
+   * const factory = mockFactory(UserSchema, {
+   *   afterBuild: async (user) => {
+   *     const saved = await db.users.create(user);
+   *     return { ...user, id: saved.id };
+   *   },
+   * });
+   * const user = await factory.async();
    */
-  afterBuild?: (value: z.infer<S>) => z.infer<S>;
+  afterBuild?: (value: z.infer<S>) => z.infer<S> | Promise<z.infer<S>>;
 }
 
 /**

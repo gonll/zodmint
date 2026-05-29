@@ -4,6 +4,18 @@ All notable changes to zodmint are documented here. This project follows [Keep a
 
 ---
 
+## [2.3.0] - 2026-05-29
+
+### Added
+- **`factory.async(callOptions?)`** — async counterpart to calling a `MockFactory` directly. Uses `mockAsync()` internally, so it correctly handles schemas with async `z.superRefine()` predicates (which would throw "Encountered Promise during synchronous parse" via the sync path in Zod v4). Returns `Promise<z.infer<S>>`.
+- **Async `afterBuild` support** — `afterBuild` may now return `Promise<z.infer<S>>` when the factory is called via `.async()`. The sync `factory()` call detects a returned `Promise` and throws `ZodForgeError [GENERATION_FAILED]` with a clear message pointing to `.async()`. This prevents silent async-in-sync bugs.
+- **`afterBuild` chaining is async-aware** — `factory.extend()` chains `afterBuild` hooks in a Promise-transparent way: if the base hook returns a `Promise`, the chain awaits it before passing the result to the extend hook. Two sync hooks chain synchronously as before.
+
+### Fixed
+- Empty merged overrides (`{}`) from factory state resolution are now normalized to `undefined` before being passed to `mock()`/`mockAsync()`. Previously, calling a factory with no base overrides, no states, and no per-call overrides still passed `overrides: {}` to the pipeline, causing it to throw `INVALID_OVERRIDE` instead of retrying when a refinement failed.
+
+---
+
 ## [2.0.0] - 2026-05-26
 
 ### Added
