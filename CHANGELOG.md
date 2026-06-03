@@ -4,6 +4,17 @@ All notable changes to zodmint are documented here. This project follows [Keep a
 
 ---
 
+## [2.6.0] - 2026-06-03
+
+### Added
+- **`zodmint/tanstack-query`** — new sub-entry for pre-populating `QueryClient` cache in tests. Framework-agnostic: imports only from `@tanstack/query-core`, works with React, Vue, Svelte, and Solid.
+  - `mockQueryClient(entries, defaultOptions?)` — creates a `QueryClient` with synchronously pre-populated cache via `setQueryData`. Applies test-friendly defaults (`retry: false`, `staleTime: Infinity`, `gcTime: Infinity`). Each entry maps a query key array to a Zod schema plus optional `MockOptions`.
+  - `mockQueryFn(schema, options?)` — returns a `queryFn`-compatible function for use directly inside `useQuery`. Useful when you want zodmint data without bypassing the query lifecycle.
+  - `mockInfiniteQueryClient(entries, defaultOptions?)` — same as `mockQueryClient` but produces TanStack Query v5 infinite data shape (`{ pages: [items[]], pageParams: [undefined] }`). Configurable `pageSize` per entry.
+- `@tanstack/query-core >= 5.0.0` added as optional peer dependency.
+
+---
+
 ## [2.5.1] - 2026-06-03
 
 ### Fixed

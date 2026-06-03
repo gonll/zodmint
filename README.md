@@ -1292,6 +1292,68 @@ Control mapping:
 
 ---
 
+### TanStack Query — `zodmint/tanstack-query`
+
+zodmint ships a `zodmint/tanstack-query` sub-entry for pre-populating a `QueryClient` cache in tests. No network, no `fetch` mock, no MSW — the data is injected directly into the cache before your component renders.
+
+Works with any TanStack Query framework adapter (React, Vue, Svelte, Solid) — imports only from `@tanstack/query-core`.
+
+```bash
+npm install @tanstack/query-core
+```
+
+```typescript
+import { mockQueryClient } from "zodmint/tanstack-query";
+```
+
+**`mockQueryClient(entries, defaultOptions?)`** — creates a `QueryClient` with synchronously pre-populated cache:
+
+```typescript
+const client = mockQueryClient([
+  { queryKey: ["user", "1"], schema: UserSchema, options: { seed: 1 } },
+  { queryKey: ["posts"],     schema: z.array(PostSchema) },
+]);
+
+// In a React test (vitest + @testing-library/react):
+render(
+  <QueryClientProvider client={client}>
+    <UserProfile userId="1" />
+  </QueryClientProvider>
+);
+// component renders immediately with valid data — no fetch, no loading state
+```
+
+The client has test-friendly defaults applied automatically: `retry: false`, `staleTime: Infinity`, `gcTime: Infinity`. Override via the second argument:
+
+```typescript
+const client = mockQueryClient(entries, { defaultOptions: { queries: { retry: 2 } } });
+```
+
+**`mockQueryFn(schema, options?)`** — returns a `queryFn`-compatible function for use directly inside `useQuery`:
+
+```typescript
+const { result } = renderHook(() =>
+  useQuery({
+    queryKey: ["user", "1"],
+    queryFn: mockQueryFn(UserSchema, { seed: 42 }),
+  })
+);
+// result.current.data is a valid User, same value on every run
+```
+
+**`mockInfiniteQueryClient(entries, defaultOptions?)`** — same as `mockQueryClient` but produces the TanStack Query v5 infinite data shape:
+
+```typescript
+const client = mockInfiniteQueryClient([
+  { queryKey: ["feed"], schema: PostSchema, pageSize: 10 },
+]);
+
+const feed = client.getQueryData(["feed"]);
+// { pages: [Post[10]], pageParams: [undefined] }
+```
+
+---
+
 ## Prior art
 
 zodmint was built with an eye on the existing ecosystem. Three libraries were studied for orientation:

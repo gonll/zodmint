@@ -1,6 +1,6 @@
 {
   "name": "zodmint",
-  "version": "2.5.1",
+  "version": "2.6.0",
   "description": "TypeScript-first schema-valid test fixture generator for Zod schemas",
   "type": "module",
   "main": "./dist/index.cjs",
@@ -36,6 +36,11 @@
       "types": "./dist/storybook.d.ts",
       "import": "./dist/storybook.js",
       "require": "./dist/storybook.cjs"
+    },
+    "./tanstack-query": {
+      "types": "./dist/tanstack-query.d.ts",
+      "import": "./dist/tanstack-query.js",
+      "require": "./dist/tanstack-query.cjs"
     }
   },
   "bin": {
@@ -67,7 +72,8 @@
     "drizzle-orm": ">=0.29.0",
     "fast-check": ">=3.0.0",
     "msw": ">=2.0.0",
-    "zod": ">=3.23.0"
+    "zod": ">=3.23.0",
+    "@tanstack/query-core": ">=5.0.0"
   },
   "peerDependenciesMeta": {
     "@prisma/client": {
@@ -81,9 +87,13 @@
     },
     "msw": {
       "optional": true
+    },
+    "@tanstack/query-core": {
+      "optional": true
     }
   },
   "devDependencies": {
+    "@tanstack/query-core": "^5.101.0",
     "@types/node": "^20.0.0",
     "fast-check": "^3.22.0",
     "msw": "^2.14.6",
@@ -133,7 +143,7 @@
     "url": "https://github.com/gonll/zodmint.git"
   },
   "homepage": "https://github.com/gonll/zodmint#readme",
-    "bugs": {
+  "bugs": {
     "url": "https://github.com/gonll/zodmint/issues"
   }
 }

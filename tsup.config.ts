@@ -10,6 +10,7 @@ export default defineConfig([
       "src/msw.ts",
       "src/seed.ts",
       "src/storybook.ts",
+      "src/tanstack-query.ts",
     ],
     format: ["esm", "cjs"],
     dts: true,
