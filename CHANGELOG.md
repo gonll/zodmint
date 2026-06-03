@@ -4,6 +4,14 @@ All notable changes to zodmint are documented here. This project follows [Keep a
 
 ---
 
+## [2.5.1] - 2026-06-03
+
+### Fixed
+- `examples/16-storybook.ts` import corrected to `zodmint/storybook` (was pointing at `../src/storybook.js`)
+- `playground/index.ts` updated with `mockAll` and `zodArgTypes`/`mockArgs` sections
+
+---
+
 ## [2.5.0] - 2026-06-03
 
 ### Added
