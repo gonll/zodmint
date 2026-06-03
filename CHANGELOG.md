@@ -4,6 +4,14 @@ All notable changes to zodmint are documented here. This project follows [Keep a
 
 ---
 
+## [2.7.0] - 2026-06-03
+
+### Added
+- **`zodmint/hono`** — new sub-entry for testing Hono routes with schema-valid mock data. `mockHonoHandler(schema, options?)` returns a Hono `Handler` that responds with `c.json(mock(schema))`. `mockHonoApp(specs)` builds a complete stub Hono app from a route spec array (`"METHOD /path"`). Supports `status`, `headers`, all `MockOptions`. Invalid method or malformed route throws `ZodForgeError`. Peer dep: `hono >= 3.0.0`.
+- **`zodmint/trpc`** — new sub-entry for mocking tRPC callers. `mockTrpcCaller(procedureMap)` returns a Proxy-based caller where any procedure chain resolves to `Promise<z.infer<S>>`. No `@trpc/server` peer dependency required. Procedure map values can be bare schemas or `{ schema, options }` for per-procedure `MockOptions`. Unknown procedures return `Promise<undefined>`. `mockProcedureOutput(schema, options?)` is a synchronous named wrapper around `mock()` for one-off output generation.
+
+---
+
 ## [2.6.0] - 2026-06-03
 
 ### Added

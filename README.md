@@ -1354,6 +1354,94 @@ const feed = client.getQueryData(["feed"]);
 
 ---
 
+### Hono — `zodmint/hono`
+
+zodmint ships a `zodmint/hono` sub-entry for testing Hono routes with schema-valid mock data. Zero overhead: responds with `c.json()` directly, no HTTP roundtrip.
+
+```bash
+npm install hono
+```
+
+```typescript
+import { mockHonoHandler, mockHonoApp } from "zodmint/hono";
+```
+
+**`mockHonoHandler(schema, options?)`** — a Hono `Handler` that responds with valid mock JSON. Drop it into any route:
+
+```typescript
+import { Hono } from "hono";
+import { mockHonoHandler } from "zodmint/hono";
+
+const app = new Hono();
+app.get("/users/:id", mockHonoHandler(UserSchema));
+app.post("/users",    mockHonoHandler(UserSchema, { status: 201, seed: 42 }));
+
+const res  = await app.request("/users/1");
+const user = await res.json();
+// user passes UserSchema.safeParse  ✓
+```
+
+Accepts all `MockOptions` plus `status` (default 200) and `headers`.
+
+**`mockHonoApp(specs)`** — builds a complete mock Hono app in one call. Useful when you want a full stub API for integration tests:
+
+```typescript
+const mockApi = mockHonoApp([
+  { route: "GET /users/:id", schema: UserSchema },
+  { route: "POST /users",    schema: UserSchema, status: 201 },
+  { route: "GET /posts",     schema: z.array(PostSchema), seed: 2 },
+]);
+
+const res   = await mockApi.request("/posts");
+const posts = await res.json();
+// posts is a valid Post[]  ✓
+```
+
+Route format is `"METHOD /path"` — same convention as `zodmint/msw`. Invalid method or missing space throws `ZodForgeError`.
+
+---
+
+### tRPC — `zodmint/trpc`
+
+zodmint ships a `zodmint/trpc` sub-entry for mocking tRPC callers in unit tests. No `@trpc/server` required — the mock caller is a Proxy that intercepts any procedure chain and returns schema-valid data.
+
+```typescript
+import { mockTrpcCaller, mockProcedureOutput } from "zodmint/trpc";
+```
+
+**`mockTrpcCaller(procedureMap, defaultOptions?)`** — creates a mock caller. Keys are dot-separated procedure paths; values are Zod output schemas (or `{ schema, options }` for per-procedure control):
+
+```typescript
+const caller = mockTrpcCaller({
+  "users.getById": UserSchema,
+  "users.list":    z.array(UserSchema),
+  "posts.create":  { schema: PostSchema, options: { seed: 1 } },
+});
+
+const user  = await caller.users.getById({ id: "1" });   // valid User
+const users = await caller.users.list();                  // valid User[]
+const post  = await caller.posts.create({ title: "hi" }); // valid Post
+```
+
+Every procedure call returns `Promise<z.infer<S>>`. Input arguments are accepted but ignored. Procedures not in the map return `Promise<undefined>` — useful for partially mocking a router.
+
+Cast to your router's caller type for full IDE completion:
+
+```typescript
+import type { createCallerFactory } from "@trpc/server";
+type Caller = ReturnType<ReturnType<typeof createCallerFactory<typeof appRouter>>>;
+
+const caller = mockTrpcCaller({ ... }) as Caller;
+```
+
+**`mockProcedureOutput(schema, options?)`** — synchronous one-off output generation. Named wrapper around `mock()` for clarity in tRPC test contexts:
+
+```typescript
+const output = mockProcedureOutput(getUserOutputSchema, { seed: 42 });
+```
+
+---
+
 ## Prior art
 
 zodmint was built with an eye on the existing ecosystem. Three libraries were studied for orientation:

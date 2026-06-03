@@ -11,6 +11,8 @@ export default defineConfig([
       "src/seed.ts",
       "src/storybook.ts",
       "src/tanstack-query.ts",
+      "src/hono.ts",
+      "src/trpc.ts",
     ],
     format: ["esm", "cjs"],
     dts: true,

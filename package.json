@@ -1,6 +1,6 @@
 {
   "name": "zodmint",
-  "version": "2.6.0",
+  "version": "2.7.0",
   "description": "TypeScript-first schema-valid test fixture generator for Zod schemas",
   "type": "module",
   "main": "./dist/index.cjs",
@@ -41,6 +41,16 @@
       "types": "./dist/tanstack-query.d.ts",
       "import": "./dist/tanstack-query.js",
       "require": "./dist/tanstack-query.cjs"
+    },
+    "./trpc": {
+      "types": "./dist/trpc.d.ts",
+      "import": "./dist/trpc.js",
+      "require": "./dist/trpc.cjs"
+    },
+    "./hono": {
+      "types": "./dist/hono.d.ts",
+      "import": "./dist/hono.js",
+      "require": "./dist/hono.cjs"
     }
   },
   "bin": {
@@ -69,11 +79,12 @@
   },
   "peerDependencies": {
     "@prisma/client": ">=5.0.0",
+    "@tanstack/query-core": ">=5.0.0",
     "drizzle-orm": ">=0.29.0",
     "fast-check": ">=3.0.0",
     "msw": ">=2.0.0",
     "zod": ">=3.23.0",
-    "@tanstack/query-core": ">=5.0.0"
+    "hono": ">=3.0.0"
   },
   "peerDependenciesMeta": {
     "@prisma/client": {
@@ -90,12 +101,16 @@
     },
     "@tanstack/query-core": {
       "optional": true
+    },
+    "hono": {
+      "optional": true
     }
   },
   "devDependencies": {
     "@tanstack/query-core": "^5.101.0",
     "@types/node": "^20.0.0",
     "fast-check": "^3.22.0",
+    "hono": "^4.12.23",
     "msw": "^2.14.6",
     "tsup": "^8.0.0",
     "typescript": "^5.4.0",
@@ -103,35 +118,37 @@
     "zod": "^4.4.3"
   },
   "keywords": [
-    "zod",
+    "boundary-testing",
+    "typescript",
+    "fake-data",
+    "mock-data",
+    "factory",
+    "coverage",
+    "db-seed",
+    "fixtures",
     "mock",
     "fixture",
-    "factory",
-    "testing",
-    "typescript",
-    "schema",
-    "generator",
-    "test-data",
-    "mock-data",
-    "fixtures",
-    "zod-mock",
-    "zod-faker",
-    "test-fixtures",
-    "fake-data",
-    "data-generator",
-    "msw",
-    "mock-service-worker",
     "snapshot",
-    "pin",
-    "seed",
-    "cli",
     "prisma",
     "drizzle",
+    "cli",
+    "zod",
+    "hono",
+    "trpc",
+    "schema",
     "database-seeding",
-    "db-seed",
+    "msw",
+    "zod-faker",
+    "test-fixtures",
+    "generator",
+    "pin",
+    "test-data",
+    "data-generator",
+    "testing",
+    "seed",
+    "mock-service-worker",
     "storybook",
-    "coverage",
-    "boundary-testing"
+    "zod-mock"
   ],
   "license": "MIT",
   "author": {
