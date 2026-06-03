@@ -4,6 +4,27 @@ All notable changes to zodmint are documented here. This project follows [Keep a
 
 ---
 
+## [2.5.0] - 2026-06-03
+
+### Added
+- **`mockAll(schema, options?)`** — returns the full boundary set for a schema. For numbers, generates min, min+1, max-1, max (plus 0 if in range). For enums, returns every value. For booleans, always `[true, false]`. For optionals/nullables, includes `undefined`/`null` alongside the inner type's boundary values. For unions, one value per branch. For arrays, empty/1/2-item variants plus length-constrained boundaries. Duplicates are removed. Every returned value passes `schema.safeParse(v).success === true`. Accepts the same options as `mock()` (`seed`, `session`, `generators`); the `mode` option is ignored.
+- **`zodmint/storybook`** — new sub-entry with `zodArgTypes(schema)` and `mockArgs(schema, options?)`. `zodArgTypes` maps a Zod object schema to a Storybook `ArgTypes` record — string→text, number→number (range when both min and max are present), boolean→boolean, enum→select, date→date, object/array→object. `z.optional()` and `z.nullable()` are transparently unwrapped. `z.describe()` populates the `description` field. `mockArgs` is a typed wrapper around `mock()` for generating story `args`. Zero runtime dependencies — no `@storybook/*` import required.
+
+---
+
+## [2.4.0] - 2026-05-29
+
+### Added
+- **`zodmint/seed`** — new sub-entry for schema-driven database seeding. `seed(inserter, schema, options?)` generates `count` valid fixtures and inserts them via any async function. Returns the full array of generated items for chaining.
+- **`prismaInserter(model)`** — wraps a Prisma model delegate (`createMany`) into a `SeedInserter`. Zero runtime dependency: uses duck typing, so no `@prisma/client` import is required in `zodmint/seed` itself.
+- **`drizzleInserter(db, table)`** — wraps a Drizzle `db.insert(table).values()` call into a `SeedInserter`. Same approach: duck typed, no drizzle-orm import.
+- **`SeedOptions`** — extends `MockOptions` with `count` (default 10), `batchSize` (default: single batch), and `async` (uses `mockAsync()` when true, for schemas with async refinements).
+- **Batched inserts** — when `batchSize < count`, records are split into chunks and inserted sequentially, respecting ORM and DB row limits per statement.
+- **Seeded determinism** — when a `seed` value is provided, each item receives an offset seed (`seed + i`) so items are distinct but the full result set is reproducible.
+- `@prisma/client >= 5.0.0` and `drizzle-orm >= 0.29.0` added as optional peer dependencies.
+
+---
+
 ## [2.3.0] - 2026-05-29
 
 ### Added

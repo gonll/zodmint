@@ -892,9 +892,45 @@ Known gaps:
 
 **ORM/OpenAPI ingestion** — Only makes sense after relational generation matures.
 
+**Relational dataset DSL** — `dataset()` + `model().belongsTo()` for generating fully coherent multi-schema datasets with referential integrity. Planned for v3.
+
 ---
 
 Zod v4 uses `new Function()` internally to compile schema validators. If your environment disables `unsafe-eval` (e.g. via CSP), stick with Zod v3.
+
+---
+
+## Coverage Mode — `mockAll`
+
+`mockAll(schema, options?)` returns the full boundary set for a schema — every interesting edge case — instead of a single value. Use it to systematically exercise constraint boundaries without writing the boundary values yourself.
+
+```typescript
+import { mockAll } from "zodmint";
+
+// Numbers: min, min+1, max-1, max (plus 0 if in range)
+mockAll(z.number().int().min(18).max(100));
+// → [0, 18, 19, 99, 100]
+
+// Enums: every value
+mockAll(z.enum(["admin", "user", "guest"]));
+// → ["admin", "user", "guest"]
+
+// Booleans: both values
+mockAll(z.boolean());
+// → [true, false]
+
+// Optional: includes undefined
+mockAll(z.string().optional());
+// → [undefined, "", "a", "abc"]
+
+// Union: one value per branch
+mockAll(z.union([z.string().uuid(), z.number().int().positive()]));
+// → ["3f2e1d4c-...", 1]
+```
+
+Every value in the returned array is guaranteed to pass `schema.safeParse(v).success === true`. Duplicates are automatically removed.
+
+`mockAll` accepts the same options as `mock()` — `seed`, `session`, `generators` — and forwards them to any internal generation calls. The `mode` option is ignored: `mockAll` always uses boundary-aware generation.
 
 ---
 
@@ -1014,6 +1050,103 @@ Or add a script to `package.json`:
 
 ---
 
+### Database Seeding — `zodmint/seed`
+
+zodmint ships a `zodmint/seed` sub-entry for generating and inserting bulk fixtures directly into your database. It works with any ORM via a plain async inserter function, and ships first-class adapters for Prisma and Drizzle.
+
+```bash
+# No extra install needed — seed works with whatever ORM you already have
+```
+
+```typescript
+import { seed, prismaInserter, drizzleInserter } from "zodmint/seed";
+```
+
+**Prisma:**
+
+```typescript
+import { PrismaClient } from "@prisma/client";
+import { seed, prismaInserter } from "zodmint/seed";
+
+const prisma = new PrismaClient();
+
+const users = await seed(prismaInserter(prisma.user), UserSchema, { count: 50 });
+// users.length === 50, each passes UserSchema.safeParse  ✓
+// prisma.user.createMany was called with all 50 records
+```
+
+**Drizzle:**
+
+```typescript
+import { drizzle } from "drizzle-orm/node-postgres";
+import { seed, drizzleInserter } from "zodmint/seed";
+import { users } from "./schema";
+
+const db = drizzle(pool);
+
+await seed(drizzleInserter(db, users), UserSchema, { count: 50 });
+```
+
+**Plain function — works with any ORM or custom writer:**
+
+```typescript
+await seed(
+  (data) => prisma.user.createMany({ data }),
+  UserSchema,
+  { count: 50 },
+);
+```
+
+`seed()` returns the full array of generated items, so you can chain it with `mockRelated()` or assert against results in tests:
+
+```typescript
+const seededUsers = await seed(prismaInserter(prisma.user), UserSchema, { count: 10 });
+// seed related posts after
+const seededPosts = await seed(
+  prismaInserter(prisma.post),
+  PostSchema,
+  { count: 10, overrides: { userId: seededUsers[0].id } },
+);
+```
+
+All `MockOptions` are supported — `seed`, `mode`, `overrides`, `generators`, `session`:
+
+```typescript
+// Deterministic — same data every time
+await seed(prismaInserter(prisma.user), UserSchema, { count: 50, seed: 1 });
+
+// Unique emails via seq() + session
+const session = createSession();
+await seed(prismaInserter(prisma.user), UserSchema, {
+  count: 50,
+  session,
+  generators: { email: () => `user-${seq("email", session)}@example.com` },
+});
+
+// Edge-mode values to stress-test DB constraints
+await seed(prismaInserter(prisma.user), UserSchema, { count: 10, mode: "edge" });
+```
+
+**Batched inserts** — for large counts or ORMs with row limits per statement:
+
+```typescript
+await seed(prismaInserter(prisma.product), ProductSchema, {
+  count: 10_000,
+  batchSize: 500, // inserts in chunks of 500
+});
+```
+
+**Async schemas** — when the schema contains async `z.superRefine()` predicates, pass `async: true`:
+
+```typescript
+await seed(prismaInserter(prisma.user), UniqueEmailSchema, {
+  count: 20,
+  async: true,
+});
+```
+
+---
+
 ### Snapshot Pinning — `mockPin`
 
 `mockPin` generates a value and writes it to a JSON fixture file the first time it runs. Subsequent calls read from the file, giving you a stable snapshot that is always valid and always typed.
@@ -1097,6 +1230,65 @@ const [user, product, order] = mockRelatedThree(
   },
 );
 ```
+
+---
+
+### Storybook — `zodmint/storybook`
+
+zodmint ships a `zodmint/storybook` sub-entry with two utilities for wiring Zod schemas into Storybook stories. No Storybook runtime dependency required — the package is a zero-dependency utility that produces plain objects Storybook understands.
+
+```typescript
+import { zodArgTypes, mockArgs } from "zodmint/storybook";
+```
+
+**`zodArgTypes(schema)`** maps a Zod object schema to a Storybook `ArgTypes` map. Each field becomes an argType with an appropriate control based on its Zod type:
+
+```typescript
+const ButtonPropsSchema = z.object({
+  label:    z.string().describe("Button text"),
+  disabled: z.boolean().optional(),
+  size:     z.enum(["sm", "md", "lg"]),
+  priority: z.number().min(1).max(10),
+});
+
+export default {
+  title: "Components/Button",
+  argTypes: zodArgTypes(ButtonPropsSchema),
+};
+// label    → { control: "text", description: "Button text" }
+// disabled → { control: "boolean" }
+// size     → { control: "select", options: ["sm", "md", "lg"] }
+// priority → { control: { type: "range", min: 1, max: 10 } }
+```
+
+**`mockArgs(schema, options?)`** generates a single valid mock value to use as story `args`:
+
+```typescript
+export const Default = {
+  args: mockArgs(ButtonPropsSchema),
+  // { label: "Submit", disabled: false, size: "md", priority: 7 }
+};
+
+export const SeededStory = {
+  args: mockArgs(ButtonPropsSchema, { seed: 42 }),
+  // same args every time — stable for snapshot tests
+};
+```
+
+Control mapping:
+
+| Zod type | Storybook control |
+|---|---|
+| `z.string()` | `"text"` |
+| `z.number()` | `"number"` |
+| `z.number().min(x).max(y)` | `{ type: "range", min: x, max: y }` |
+| `z.boolean()` | `"boolean"` |
+| `z.enum([...])` / `z.nativeEnum(E)` | `"select"` with `options` |
+| `z.date()` | `"date"` |
+| `z.object({...})` / `z.array(...)` | `"object"` |
+| everything else | `"text"` (fallback) |
+
+`z.optional()` and `z.nullable()` are transparently unwrapped — the inner type determines the control. `z.describe("...")` populates the `description` field on the argType.
 
 ---
 

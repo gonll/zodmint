@@ -8,6 +8,8 @@ export default defineConfig([
       "src/testing.ts",
       "src/fast-check.ts",
       "src/msw.ts",
+      "src/seed.ts",
+      "src/storybook.ts",
     ],
     format: ["esm", "cjs"],
     dts: true,
