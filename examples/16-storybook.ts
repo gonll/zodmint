@@ -1,6 +1,6 @@
 // 16-storybook.ts — zodmint/storybook: argTypes + mockArgs for Storybook stories
 import { z } from "zod";
-import { zodArgTypes, mockArgs } from "../src/storybook.js";
+import { zodArgTypes, mockArgs } from "zodmint/storybook";
 
 const ButtonPropsSchema = z.object({
   label: z.string().describe("Button text"),
