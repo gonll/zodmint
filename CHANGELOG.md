@@ -4,6 +4,14 @@ All notable changes to zodmint are documented here. This project follows [Keep a
 
 ---
 
+## [2.7.2] - 2026-08-25
+
+### Fixed
+- **Overriding a nested path whose generated base was `undefined`/`null` threw a confusing error blaming an unrelated sibling field.** `overrides` were applied with a schema-unaware `deepMerge()`, so when the value at some path wasn't itself a plain object — an optional object field the RNG decided to omit, or a `z.lazy()` branch truncated at `maxDepth` — merging a partial override there replaced the missing base wholesale with the raw override object, silently dropping every required field the override didn't mention. `safeParse` then failed complaining that sibling was `Required`, even though it was never part of the override. Overrides are now applied with a schema-aware merge that, whenever it needs to land a partial override on a non-object base, first resolves the schema at that position (seeing through `optional`/`nullable`/`default`/`lazy`/`branded`/`readonly` and both sides of an intersection) and synthesizes a full value from it via the normal generator before merging the override on top. Positions only reachable through a `union` (where the base being missing means the branch isn't knowable) still fall back to the previous overwrite behavior.
+- **`deepMergeForIntersection` let an explicit `undefined` from the right side of a `z.and()` clobber a concrete, valid value the left side generated, for any field type** — not just the literal/enum case fixed in 2.7.1. `dispatchObject` writes an explicit `undefined` into an omitted optional key rather than leaving it missing, and the merge treated that `undefined` like any other value B "wins" with. A field required on one side and re-declared optional on the other (the same discriminator-merging pattern, just with a plain `string`/`number` instead of an enum) could have the optional side's own omit coin-flip wipe out the required side's already-valid value. The merge now treats a `b` side of `undefined` as "no value here," letting `a`'s value stand at every nesting level.
+
+---
+
 ## [2.7.1] - 2026-08-25
 
 ### Fixed

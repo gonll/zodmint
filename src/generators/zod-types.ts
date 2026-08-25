@@ -967,14 +967,15 @@ function dispatchIntersection(
 }
 
 function deepMergeForIntersection(a: unknown, b: unknown): unknown {
+  // B has no value here — A's value (if any) stands. Without this, an optional
+  // field on B's side that independently rolled "omit" (dispatchObject writes an
+  // explicit `undefined`, not a missing key) would blindly wipe out a concrete,
+  // already-valid value A generated for a field A requires.
+  if (b === undefined) return a;
   if (isPlainObject(a) && isPlainObject(b)) {
     const result: Record<string, unknown> = { ...(a as Record<string, unknown>) };
     for (const [k, v] of Object.entries(b as Record<string, unknown>)) {
-      if (isPlainObject(result[k]) && isPlainObject(v)) {
-        result[k] = deepMergeForIntersection(result[k], v);
-      } else {
-        result[k] = v; // B overrides A on scalar conflicts; arrays replace
-      }
+      result[k] = deepMergeForIntersection(result[k], v);
     }
     return result;
   }

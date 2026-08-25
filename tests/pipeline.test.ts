@@ -98,6 +98,24 @@ describe("z.intersection()", () => {
     expect(schema.safeParse(result).success).toBe(true);
   });
 
+  it("B's own optional-field omission never clobbers A's required value for a non-enum shared field", () => {
+    // Regression test: dispatchObject writes an explicit `undefined` into an
+    // omitted optional key rather than leaving it missing, and the old
+    // deepMergeForIntersection unconditionally let B win on every shared key —
+    // including that undefined. A required `sibling` on the left and the same
+    // field redeclared optional on the right (a common discriminator-merging
+    // pattern, independent of whether the field is a literal/enum) would then
+    // have ~30% of runs clobber the left's valid generated number with
+    // undefined, failing re-validation.
+    const inner = z.object({ c: z.string(), sibling: z.number().int() });
+    const schema = z.lazy(() => inner).and(z.object({ sibling: z.number().int().optional() }));
+
+    for (let seed = 0; seed < 200; seed++) {
+      const result = mock(schema, { seed });
+      expect(schema.safeParse(result).success).toBe(true);
+    }
+  });
+
   describe("union of intersections with a widened shared enum field", () => {
     // Regression test: a real-world Kubb-generated OpenAPI shape where each
     // union branch is `narrowBase.and(z.object({ strategy: WIDE_ENUM.optional() }))`

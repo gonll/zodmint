@@ -36,7 +36,7 @@ export type DeepPartial<T> = T extends (infer U)[]
   ? { [K in keyof T]?: DeepPartial<T[K]> }
   : T;
 
-function isPlainObject(v: unknown): v is Record<string, unknown> {
+export function isPlainObject(v: unknown): v is Record<string, unknown> {
   return (
     typeof v === "object" &&
     v !== null &&

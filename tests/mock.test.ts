@@ -82,6 +82,90 @@ describe("mock()", () => {
     expect(typeof result.user.age).toBe("number");
   });
 
+  it("overriding into an optional object field that generated as undefined synthesizes required siblings", () => {
+    // Regression test: deepMerge() has no schema awareness, so when the generated
+    // base at `a.b` is `undefined` (the optional field's own coin-flip omitted it),
+    // merging a partial override used to replace it wholesale with the raw override
+    // object — dropping `sibling` entirely and making safeParse fail blaming the
+    // untouched sibling field instead of the real cause. mergeOverrides() now
+    // synthesizes a full `b` object from the schema first, then merges the override
+    // onto that.
+    const schema = z.object({
+      a: z.object({
+        b: z.object({ c: z.string(), sibling: z.number() }).optional(),
+      }),
+    });
+
+    let found = false;
+    for (let seed = 0; seed < 200 && !found; seed++) {
+      const plain = mock(schema, { seed });
+      if (plain.a.b === undefined) {
+        found = true;
+        const result = mock(schema, { seed, overrides: { a: { b: { c: "hello" } } } });
+        expect(result.a.b?.c).toBe("hello");
+        expect(typeof result.a.b?.sibling).toBe("number");
+        expect(schema.safeParse(result).success).toBe(true);
+      }
+    }
+    expect(found).toBe(true); // sanity: the undefined-base scenario was actually hit
+  });
+
+  it("overriding into a nullable object field that generated as null synthesizes required siblings", () => {
+    const schema = z.object({
+      a: z.object({ b: z.number(), c: z.string() }).nullable(),
+    });
+
+    let found = false;
+    for (let seed = 0; seed < 200 && !found; seed++) {
+      const plain = mock(schema, { seed });
+      if (plain.a === null) {
+        found = true;
+        const result = mock(schema, { seed, overrides: { a: { b: 7 } } });
+        expect(result.a?.b).toBe(7);
+        expect(typeof result.a?.c).toBe("string");
+        expect(schema.safeParse(result).success).toBe(true);
+      }
+    }
+    expect(found).toBe(true);
+  });
+
+  it("overriding through a z.lazy().and() chain synthesizes the full merged base", () => {
+    const inner = z.object({ c: z.string(), sibling: z.number().int() });
+    const bLazy = z.lazy(() => inner).and(z.object({ extra: z.string().optional() }));
+    const schema = z.object({ a: z.object({ b: bLazy.optional() }) });
+
+    let found = false;
+    for (let seed = 0; seed < 200 && !found; seed++) {
+      const plain = mock(schema, { seed }) as { a: { b?: { c: string; sibling: number } } };
+      if (plain.a.b === undefined) {
+        found = true;
+        const result = mock(schema, { seed, overrides: { a: { b: { c: "hi" } } } }) as {
+          a: { b?: { c: string; sibling: number } };
+        };
+        expect(result.a.b?.c).toBe("hi");
+        expect(typeof result.a.b?.sibling).toBe("number");
+        expect(schema.safeParse(result).success).toBe(true);
+      }
+    }
+    expect(found).toBe(true);
+  });
+
+  it("overriding a path only reachable through a union falls back to overwrite without an internal crash", () => {
+    // Behind a union we can't know which branch the override's schema-aware
+    // synthesis should target without generating first, so mergeOverrides() bails
+    // out to the old raw-overwrite behavior for this case. It must still never throw
+    // anything other than a well-formed ZodForgeError.
+    const branch1 = z.object({ kind: z.literal("a"), x: z.object({ y: z.number() }).optional() });
+    const branch2 = z.object({ kind: z.literal("b"), z: z.string() });
+    const schema = z.union([branch1, branch2]);
+    try {
+      const result = mock(schema, { overrides: { x: { y: 5 } } as never });
+      expect(schema.safeParse(result).success).toBe(true);
+    } catch (e) {
+      expect(e).toBeInstanceOf(ZodForgeError);
+    }
+  });
+
   it("throws INVALID_OVERRIDE when override fails validation", () => {
     const schema = z.object({ age: z.number().int().positive() });
     expect(() => mock(schema, { overrides: { age: -5 } })).toThrow(ZodForgeError);
