@@ -97,6 +97,74 @@ describe("z.intersection()", () => {
     expect(Array.isArray(result.tags)).toBe(true);
     expect(schema.safeParse(result).success).toBe(true);
   });
+
+  describe("union of intersections with a widened shared enum field", () => {
+    // Regression test: a real-world Kubb-generated OpenAPI shape where each
+    // union branch is `narrowBase.and(z.object({ strategy: WIDE_ENUM.optional() }))`
+    // — the intersection's right side re-declares a field the left side already
+    // narrows to a literal/small enum. Generating each side of the intersection
+    // independently and letting the right side win on conflict (the pre-fix
+    // behavior) frequently overwrote the narrow, correct value with a mismatched
+    // or `undefined` one, invalidating the object against every union branch.
+    const ALL_STRATEGIES = z.enum([
+      "perLease",
+      "perBedroom",
+      "perRoom",
+      "perOccupant",
+      "townhomeAllowance",
+    ]);
+
+    const perLeaseSchema = z.object({
+      subject: z.enum(["reservations"]),
+      action: z.enum(["limit"]),
+      strategy: z.enum(["perLease"]),
+      value: z.number().int().min(1),
+    });
+
+    const perBedroomSchema = z.object({
+      subject: z.enum(["room", "bedroom"]),
+      action: z.enum(["limit"]),
+      strategy: z.enum(["perBedroom", "perRoom"]),
+      value: z.number().int().min(1),
+    });
+
+    const policySchema = z.union([
+      perLeaseSchema.and(z.object({ strategy: ALL_STRATEGIES.optional() })),
+      perBedroomSchema.and(z.object({ strategy: ALL_STRATEGIES.optional() })),
+    ]);
+
+    it("always generates a strategy consistent with the chosen branch", () => {
+      for (let seed = 0; seed < 200; seed++) {
+        const result = mock(policySchema, { seed });
+        const check = policySchema.safeParse(result);
+        expect(check.success).toBe(true);
+      }
+    });
+
+    it("never lets the widening side null out the narrow side's required value", () => {
+      const result = mock(perLeaseSchema.and(z.object({ strategy: ALL_STRATEGIES.optional() })));
+      expect(result.strategy).toBe("perLease");
+    });
+
+    it("throws GENERATION_FAILED when both sides require disjoint literals", () => {
+      const schema = z.intersection(
+        z.object({ tag: z.literal("a") }),
+        z.object({ tag: z.literal("b") }),
+      );
+      expect(() => mock(schema)).toThrow(ZodForgeError);
+    });
+
+    it("omits an optional field on both sides rather than picking an unshared value", () => {
+      const schema = z.intersection(
+        z.object({ tag: z.literal("a").optional() }),
+        z.object({ tag: z.literal("b").optional() }),
+      );
+      for (let seed = 0; seed < 50; seed++) {
+        const result = mock(schema, { seed });
+        expect(schema.safeParse(result).success).toBe(true);
+      }
+    });
+  });
 });
 
 describe("z.coerce.*", () => {
@@ -293,6 +361,44 @@ describe("z.lazy() and recursion", () => {
       expect((e as ZodForgeError).code).toBe("MAX_DEPTH_EXCEEDED");
       expect((e as ZodForgeError).message).toMatch(/maxDepth/);
     }
+  });
+
+  it("does not count unrelated object/array nesting against a lazy schema's recursion budget", () => {
+    // Regression test: maxDepth used to be a raw tree-depth counter incremented
+    // on every object field / array item traversal, not just lazy re-entry. A
+    // schema that is merely tall (several distinct, non-recursive z.lazy()
+    // layers reached through ordinary object/array nesting) would exhaust the
+    // default maxDepth of 2 before ever actually recursing, throwing
+    // MAX_DEPTH_EXCEEDED on a perfectly finite schema. Each branch below wraps
+    // a DIFFERENT z.lazy() node (no self-reference), so none of them should
+    // ever hit the recursion limit regardless of how deep the surrounding
+    // object/array/union/intersection nesting is.
+    function branch(tag: string) {
+      const base = z.object({ tag: z.literal(tag), value: z.number().int().min(1) });
+      const widener = z.object({ tag: z.enum([tag, "other"]).optional() });
+      return z.lazy(() => base).and(widener);
+    }
+    const item = z.union([branch("a"), branch("b"), branch("c")]);
+    const wrapped = z.object({ items: z.array(item) });
+
+    for (let seed = 0; seed < 100; seed++) {
+      const result = mock(wrapped, { seed });
+      expect(wrapped.safeParse(result).success).toBe(true);
+    }
+  });
+
+  it("still bounds genuine self-recursion through the same lazy node", () => {
+    type Node = { child?: Node };
+    const RecursiveSchema: z.ZodType<Node> = z.lazy(() =>
+      z.object({ child: RecursiveSchema.optional() }),
+    );
+    let hops = 0;
+    let cur: Node | undefined = mock(RecursiveSchema, { maxDepth: 4, seed: 1 });
+    while (cur?.child !== undefined) {
+      hops++;
+      cur = cur.child;
+    }
+    expect(hops).toBeLessThanOrEqual(4);
   });
 });
 

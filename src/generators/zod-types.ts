@@ -832,14 +832,131 @@ function dispatchDiscriminatedUnion(
   return dispatch(chosen, ctx, config, leafKey(ctx.path));
 }
 
+/**
+ * Unwraps z.lazy() wrappers to find the schema they resolve to. Intersection
+ * sides built from recursive types (e.g. `z.lazy(() => Base).and(Widener)`)
+ * are ZodLazy at the top, not the object itself — shape correlation needs to
+ * see through that.
+ */
+function resolveLazyChain(schema: z.ZodTypeAny): z.ZodTypeAny {
+  let current = schema;
+  for (let i = 0; i < 10 && typeName(current) === "lazy"; i++) {
+    current = getLazyGetter(current)();
+  }
+  return current;
+}
+
+/**
+ * Unwraps ZodOptional to find a literal/enum "core" for a field, so shared
+ * fields across an intersection's two sides can be checked for a common
+ * value domain. Returns null for anything else (nullable, default, object,
+ * primitive types, ...) — those keep the pre-existing independent-generation
+ * + merge behavior, since there's no cheap way to correlate them here.
+ */
+function resolveLiteralOrEnumField(
+  fieldSchema: z.ZodTypeAny,
+): { values: unknown[]; optional: boolean } | null {
+  let current = fieldSchema;
+  let optional = false;
+  for (let i = 0; i < 5; i++) {
+    const tn = typeName(current);
+    if (tn === "optional") {
+      optional = true;
+      current = getInnerType(current);
+      continue;
+    }
+    if (tn === "literal") return { values: [getLiteralValue(current)], optional };
+    if (tn === "enum") return { values: getEnumValues(current), optional };
+    return null;
+  }
+  return null;
+}
+
+/**
+ * Computes forced per-path value overrides for literal/enum fields declared
+ * on both sides of an intersection's object shapes.
+ *
+ * Without this, dispatchIntersection generates each side independently and
+ * merges with "right wins on scalar conflict" (see deepMergeForIntersection).
+ * That's unsound whenever one side narrows a field (e.g. `strategy: z.enum(["perLease"])`)
+ * and the other widens it (e.g. a shared discriminator re-declared as
+ * `strategy: ALL_STRATEGIES.optional()`, common in generated OpenAPI schemas
+ * that merge a discriminator declaration onto each variant): the two sides
+ * are generated blind to each other, so the wider side's independently-picked
+ * value (or its own coin-flip to omit the optional field, which still writes
+ * `undefined` into the merge) frequently overwrites the narrower side's
+ * already-valid value, producing an object that satisfies neither.
+ *
+ * Instead, for each field present in both shapes with a literal/enum core,
+ * this intersects the two value domains and forces both sides to generate
+ * that single, mutually-valid value (via the existing path-based generator
+ * override mechanism), so independent generation can never disagree on it.
+ */
+function buildCorrelatedFieldGenerators(
+  left: z.ZodTypeAny,
+  right: z.ZodTypeAny,
+  ctx: GenerationContext,
+): Record<string, () => unknown> | null {
+  const resolvedLeft = resolveLazyChain(left);
+  const resolvedRight = resolveLazyChain(right);
+  if (typeName(resolvedLeft) !== "object" || typeName(resolvedRight) !== "object") return null;
+
+  const leftShape = getShape(resolvedLeft);
+  const rightShape = getShape(resolvedRight);
+  let generators: Record<string, () => unknown> | null = null;
+
+  for (const key of Object.keys(leftShape)) {
+    if (!(key in rightShape)) continue;
+    const l = resolveLiteralOrEnumField(leftShape[key] as z.ZodTypeAny);
+    const r = resolveLiteralOrEnumField(rightShape[key] as z.ZodTypeAny);
+    if (!l || !r) continue;
+
+    const leftValues = new Set(l.values);
+    const shared = r.values.filter((v) => leftValues.has(v));
+    const bothOptional = l.optional && r.optional;
+
+    let forced: unknown;
+    if (shared.length > 0) {
+      forced = shared.length === 1 ? shared[0] : ctx.rng.pick(shared);
+      if (bothOptional && ctx.mode !== "edge" && !ctx.rng.bool(0.7)) forced = undefined;
+    } else if (bothOptional) {
+      // No value satisfies both sides, but neither side requires the key —
+      // omitting it is always valid.
+      forced = undefined;
+    } else {
+      throw new ZodForgeError(
+        `Intersection at ${formatPath([...ctx.path, key])} is unsatisfiable: ` +
+          `one side requires a value in [${l.values.join(", ")}], the other in ` +
+          `[${r.values.join(", ")}], and the two sets do not overlap.`,
+        "GENERATION_FAILED",
+      );
+    }
+
+    generators ??= {};
+    generators[[...ctx.path, key].join(".")] = () => forced;
+  }
+
+  return generators;
+}
+
 function dispatchIntersection(
   schema: z.ZodTypeAny,
   ctx: GenerationContext,
   config: GlobalConfig,
 ): unknown {
   const { left, right } = getIntersectionParts(schema);
-  const leftVal = dispatch(left, ctx, config, leafKey(ctx.path));
-  const rightVal = dispatch(right, ctx, config, leafKey(ctx.path));
+
+  // Correlate shared literal/enum fields before generating either side, so a
+  // narrowing branch and a widening branch never disagree on their overlap.
+  // Existing path-based overrides (ctx.generators from user-supplied
+  // `generators` option) always take precedence over our inferred ones.
+  const correlated = buildCorrelatedFieldGenerators(left, right, ctx);
+  const genCtx = correlated
+    ? { ...ctx, generators: { ...correlated, ...ctx.generators } }
+    : ctx;
+
+  const leftVal = dispatch(left, genCtx, config, leafKey(ctx.path));
+  const rightVal = dispatch(right, genCtx, config, leafKey(ctx.path));
 
   const merged = deepMergeForIntersection(leftVal, rightVal);
 
@@ -1039,13 +1156,23 @@ function dispatchSet(
   return set;
 }
 
+/**
+ * Counts how many times this exact lazy schema node is already being resolved
+ * on the current path (i.e. genuine self/mutual recursion), as opposed to the
+ * schema's overall nesting depth. A tall-but-finite stack of distinct
+ * `z.lazy()` nodes (e.g. several `z.lazy(() => X).and(Y)` layers, each a
+ * different lazy reference) each show up with count 0 here and never consume
+ * the recursion budget — only actually revisiting the same node does.
+ */
 function dispatchLazy(
   schema: z.ZodTypeAny,
   ctx: GenerationContext,
   config: GlobalConfig,
   leaf: string | null,
 ): unknown {
-  if (ctx.depth >= ctx.maxDepth) {
+  const recursionCount = ctx.lazyStack.filter((s) => s === schema).length;
+
+  if (recursionCount >= ctx.maxDepth) {
     // Check what the lazy resolves to
     const getter = getLazyGetter(schema);
     const inner = getter();
@@ -1060,18 +1187,17 @@ function dispatchLazy(
 
     // Required object at max depth → error
     throw new ZodForgeError(
-      `Required object at ${formatPath(ctx.path)} exceeded maxDepth of ${ctx.maxDepth}. ` +
-        `Increase maxDepth or make the schema optional to allow termination.`,
+      `Required object at ${formatPath(ctx.path)} exceeded maxDepth of ${ctx.maxDepth} recursive ` +
+        `references to the same z.lazy() schema. Increase maxDepth or make the schema optional to ` +
+        `allow termination.`,
       "MAX_DEPTH_EXCEEDED",
     );
   }
 
   const getter = getLazyGetter(schema);
   const inner = getter();
-  // The caller's childCtx/arrayItemCtx already incremented depth before reaching
-  // dispatchLazy. Do not increment again here — pass ctx directly to avoid
-  // double-incrementing and premature MAX_DEPTH_EXCEEDED errors.
-  return dispatch(inner, ctx, config, leaf);
+  const nextCtx: GenerationContext = { ...ctx, lazyStack: [...ctx.lazyStack, schema] };
+  return dispatch(inner, nextCtx, config, leaf);
 }
 
 // ---------------------------------------------------------------------------

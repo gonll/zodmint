@@ -60,7 +60,7 @@ export function mock<S extends z.ZodTypeAny>(
 
   const ctx: GenerationContext = {
     path: [],
-    depth: 0,
+    lazyStack: [],
     maxDepth: options?.maxDepth ?? config.maxDepth,
     rng,
     mode,
@@ -128,7 +128,7 @@ export async function mockAsync<S extends z.ZodTypeAny>(
 
   const ctx: GenerationContext = {
     path: [],
-    depth: 0,
+    lazyStack: [],
     maxDepth: options?.maxDepth ?? config.maxDepth,
     rng,
     mode,

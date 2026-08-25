@@ -22,7 +22,15 @@ export interface SeededRNG {
 export interface GenerationContext {
   /** Path segments to current node, e.g. ["user", "addresses", "*", "zipCode"] */
   path: string[];
-  depth: number;
+  /**
+   * z.lazy() schema nodes currently being resolved on the path from the root
+   * to here (most recent last). Used to bound genuine self/mutual recursion
+   * against maxDepth — see dispatchLazy. Deeply nested but non-recursive
+   * schemas (e.g. several distinct `z.lazy(() => X).and(Y)` layers stacked,
+   * each a different lazy node) never appear here more than once, so they
+   * don't consume the recursion budget.
+   */
+  lazyStack: unknown[];
   maxDepth: number;
   rng: SeededRNG;
   mode: GenerationMode;
@@ -109,7 +117,6 @@ export function childCtx(
   return {
     ...ctx,
     path: [...ctx.path, key],
-    depth: ctx.depth + 1,
   };
 }
 
@@ -117,6 +124,5 @@ export function arrayItemCtx(ctx: GenerationContext): GenerationContext {
   return {
     ...ctx,
     path: [...ctx.path, "*"],
-    depth: ctx.depth + 1,
   };
 }

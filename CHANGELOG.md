@@ -4,6 +4,14 @@ All notable changes to zodmint are documented here. This project follows [Keep a
 
 ---
 
+## [2.7.1] - 2026-08-25
+
+### Fixed
+- **`z.union([...z.intersection(...)])` generated invalid values when one side of an intersection narrows a field (e.g. a literal/small enum) that the other side redeclares with a wider enum** — common in Kubb/OpenAPI-generated schemas that merge a shared discriminator declaration onto each variant via `.and()`. `dispatchIntersection` previously generated each side of `.and()` independently and let the right side win on scalar conflicts, so the wider side's independently-rolled value (or its own coin-flip to omit an optional field, which still wrote `undefined` into the merge) routinely overwrote the narrow side's already-valid value — invalidating the object against every union branch. It now inspects both object shapes before generating either side, intersects the value domains of shared literal/enum fields, and forces both sides to generate that single mutually-valid value. Unsatisfiable required overlaps now throw `GENERATION_FAILED` immediately instead of surfacing as a confusing `invalid_union` at the root.
+- **`maxDepth` counted ordinary object/array nesting against a `z.lazy()` schema's recursion budget, not just genuine self-recursion** — a schema that was merely tall (several distinct, non-recursive `z.lazy()` layers reached through normal object/array/union/intersection nesting) could exhaust the default `maxDepth: 2` and throw `MAX_DEPTH_EXCEEDED` even though nothing in it actually recurses. The depth check is now scoped to how many times the *same* lazy schema node is already being resolved on the current path, matching the documented "recursion" contract — deeply layered-but-finite schemas are unaffected, and genuine self/mutual recursion is still bounded by `maxDepth` as before.
+
+---
+
 ## [2.7.0] - 2026-06-03
 
 ### Added
