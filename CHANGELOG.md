@@ -4,6 +4,28 @@ All notable changes to zodmint are documented here. This project follows [Keep a
 
 ---
 
+## [2.7.3] - 2026-08-26
+
+### Fixed
+- **Shared-field correlation across `z.and()` sides now covers numeric/bigint ranges, not just literal/enum values.** A field required on one side (e.g. `z.number().min(100)`) and re-declared with a different, still-overlapping range on the other (e.g. `z.number().max(200)`) could previously have the independently-generated, unresolved right-side value fall outside the left side's requirement. `dispatchIntersection` now merges both sides' range constraints (min/max/int/positive/negative/multipleOf, ...) and generates one value valid for both; genuinely disjoint required ranges now throw `GENERATION_FAILED` immediately instead of surfacing later as a confusing root-level `safeParse` failure. (`extractNumberConstraints`/`extractBigIntConstraints` were pulled out of `dispatchNumber`/`dispatchBigInt` into `constraints.ts` so both the normal dispatch path and this correlation logic share one parser instead of duplicating it.)
+- **Overriding into a path only reachable through a `z.union()`/`z.discriminatedUnion()` no longer always falls back to a raw overwrite.** When the union-typed value itself is missing (an optional field the RNG omitted), `mergeOverrides` now picks the first branch whose shape structurally declares every key the override mentions, synthesizes a full value from it, and merges the override on top — the same schema-aware synthesis introduced in 2.7.2, extended to unions via a purely structural fit-check (no schema execution, so it can never double-run a transform). Guessing the wrong branch is no worse than the previous behavior: the root pipeline's single `safeParse` still catches it the same way.
+- **Override schema resolution now sees through `.transform()`/`.pipe()`/refinements**, matching the same input/output choice `dispatch()` itself already makes for those wrappers — an override reaching into a transformed object that generated as `undefined` no longer bails out before it even tries.
+- **A field whose type is fundamentally unsupported (`z.function()`, `z.never()`, ...) no longer crashes generation just because it happened to be optional/nullable.** `dispatchOptional`/`dispatchNullable` previously called `dispatch()` on the inner type unconditionally on their "generate a value" branch, so an unsupported inner type crashed the whole schema ~70%/80% of the time even though `undefined`/`null` is always a valid value for it. They now catch `UNSUPPORTED_SCHEMA` specifically and fall back to `undefined`/`null`; every other error code (a real generation problem) still propagates unchanged.
+
+### Added
+- A seeded property-based schema fuzzer (`tests/fuzz.test.ts`) that composes random Zod schema trees (objects, arrays, unions, intersections, optionals, bounded-depth `z.lazy()`, ...) and asserts every generated value either throws a well-formed `ZodForgeError` or passes `safeParse` — the class of regression test that would have caught the 2.7.1/2.7.2 bugs directly.
+- A soak test (`tests/examples-soak.test.ts`) that runs every file under `examples/` end-to-end and asserts none of them throw — found and enabled a fix for the `z.function().optional()` bug above (`examples/16-storybook.ts` previously had to be skipped).
+- A `test-zod-versions` CI job matrixing the test suite against `zod@3.23.0` (the package's declared minimum) and `zod@latest`, independent of the existing Node-version matrix, to catch `compat.ts` v3/v4 drift going forward. Running it locally against 3.23.0 surfaced pre-existing gaps not fixed in this release — see below.
+
+### Known issues (not fixed in this release)
+Running the new CI zod-version matrix locally against `zod@3.23.0` surfaced four pre-existing compat gaps, left for separate follow-up:
+- `z.promise()` throws `UNSUPPORTED_SCHEMA` on this build (`getInnerType` doesn't recognize this version's `ZodPromise` def shape).
+- `z.map(...).min(n)` — `.min` isn't a function on `ZodMap` in this build.
+- `z.nativeEnum()` — reverse-map filtering returns the raw enum object instead of just forward values.
+- A discriminated-union + object-level `.refine()` retry case behaves differently than on later zod versions.
+
+---
+
 ## [2.7.2] - 2026-08-25
 
 ### Fixed

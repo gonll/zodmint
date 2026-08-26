@@ -49,6 +49,37 @@ describe("UNSUPPORTED_SCHEMA errors", () => {
     }
   });
 
+  it("z.function() throws UNSUPPORTED_SCHEMA when required", () => {
+    try {
+      mock(z.object({ onClick: z.function() }));
+    } catch (e) {
+      expect((e as ZodForgeError).code).toBe("UNSUPPORTED_SCHEMA");
+    }
+  });
+
+  it("z.function().optional() no longer always throws — falls back to undefined", () => {
+    // Regression test: dispatchOptional() used to call dispatch() on the inner
+    // type unconditionally on its 70% "generate" branch, so a fundamentally
+    // unsupported inner type (z.function(), z.never(), ...) crashed the whole
+    // schema even though the field was optional and `undefined` is always a
+    // valid value for it. It now catches UNSUPPORTED_SCHEMA specifically and
+    // falls back to undefined/null, leaving every other error code (a real
+    // generation problem) to still propagate.
+    const schema = z.object({ onClick: z.function().optional(), label: z.string() });
+    for (let seed = 0; seed < 200; seed++) {
+      const result = mock(schema, { seed });
+      expect(schema.safeParse(result).success).toBe(true);
+    }
+  });
+
+  it("z.never().nullable() falls back to null instead of throwing", () => {
+    const schema = z.object({ x: z.never().nullable() });
+    for (let seed = 0; seed < 50; seed++) {
+      const result = mock(schema, { seed });
+      expect(result.x).toBeNull();
+    }
+  });
+
   it("z.preprocess() with non-primitive output now works (generates from output schema)", () => {
     // preprocess with a complex output type now generates from the output schema directly
     const schema = z.preprocess((v) => v, z.object({ x: z.string() }));

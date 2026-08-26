@@ -1,5 +1,7 @@
+import type { z } from "zod";
 import { ZodForgeError, formatPath } from "../errors.js";
 import type { GenerationContext, SeededRNG } from "../context.js";
+import { isV4, rawDef, getChecks, normalizeV4Checks } from "../compat.js";
 
 /** Fixed deterministic anchor date for seeded generation (2024-01-01T00:00:00.000Z) */
 const ANCHOR_MS = 1704067200000;
@@ -750,6 +752,108 @@ export interface NumberConstraints {
   lte?: number;
 }
 
+/**
+ * Reads a schema's structural number constraints (min/max/int/etc.), independent
+ * of any semantic/matcher inference — shared by dispatchNumber() and by
+ * dispatchIntersection()'s shared-field correlation (see zod-types.ts).
+ */
+export function extractNumberConstraints(schema: z.ZodTypeAny): NumberConstraints {
+  const c: NumberConstraints = {};
+
+  if (isV4(schema)) {
+    // v4-mini: z.int(), z.float32(), etc. store their format at the top level
+    // of def rather than in a checks array.
+    const topDef = rawDef(schema);
+    if (topDef.check === "number_format") {
+      const fmt = topDef.format as string | undefined;
+      if (fmt === "safeint" || fmt === "int" || fmt === "int32" || fmt === "int64" ||
+          fmt === "uint32" || fmt === "uint64") {
+        c.int = true;
+      }
+      // float32/float64 are just ordinary floats — no special constraint needed
+    }
+
+    const rawChecks = getChecks(schema);
+    const checks = normalizeV4Checks(rawChecks);
+
+    for (const cd of checks) {
+      switch (cd.check as string) {
+        case "greater_than":
+          if (cd.inclusive) {
+            c.gte = cd.value as number;
+            c.min = cd.value as number;
+            if ((cd.value as number) > 0) c.positive = true;
+            if ((cd.value as number) === 0) c.nonnegative = true;
+          } else {
+            c.gt = cd.value as number;
+            if ((cd.value as number) >= 0) c.positive = true;
+          }
+          break;
+        case "less_than":
+          if (cd.inclusive) {
+            c.lte = cd.value as number;
+            c.max = cd.value as number;
+            if ((cd.value as number) < 0) c.negative = true;
+            if ((cd.value as number) === 0) c.nonpositive = true;
+          } else {
+            c.lt = cd.value as number;
+            if ((cd.value as number) <= 0) c.negative = true;
+          }
+          break;
+        case "number_format":
+          if (cd.format === "safeint" || cd.format === "int") c.int = true;
+          if (cd.format === "finite") c.finite = true;
+          break;
+        case "multiple_of":
+          c.multipleOf = cd.value as number;
+          break;
+      }
+    }
+  } else {
+    // v3
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const checks = getChecks(schema) as any[];
+
+    for (const check of checks) {
+      switch (check.kind) {
+        case "min": c.gte = check.value; c.min = check.value; break;
+        case "max": c.lte = check.value; c.max = check.value; break;
+        case "int": c.int = true; break;
+        case "multipleOf": c.multipleOf = check.value; break;
+        case "finite": c.finite = true; break;
+      }
+    }
+
+    // Handle positive / nonnegative / negative / nonpositive in v3.
+    // .positive() → { kind: "min", value: 0, inclusive: false }
+    // .nonnegative() → { kind: "min", value: 0, inclusive: true }
+    // .negative() → { kind: "max", value: 0, inclusive: false }
+    // .nonpositive() → { kind: "max", value: 0, inclusive: true }
+    for (const check of checks) {
+      if (check.kind === "min") {
+        if (check.value > 0) {
+          c.positive = true;
+        } else if (check.value === 0 && check.inclusive === false) {
+          c.positive = true;  // .positive() → min(0, exclusive) → must be > 0
+        } else if (check.value === 0) {
+          c.nonnegative = true;  // .nonnegative() → min(0, inclusive)
+        }
+      }
+      if (check.kind === "max") {
+        if (check.value < 0) {
+          c.negative = true;
+        } else if (check.value === 0 && check.inclusive === false) {
+          c.negative = true;  // .negative() → max(0, exclusive) → must be < 0
+        } else if (check.value === 0) {
+          c.nonpositive = true;  // .nonpositive() → max(0, inclusive)
+        }
+      }
+    }
+  }
+
+  return c;
+}
+
 export function validateNumberConstraints(
   c: NumberConstraints,
   path: string[],
@@ -954,6 +1058,62 @@ export interface BigIntConstraints {
   gte?: bigint;
   lt?: bigint;
   lte?: bigint;
+}
+
+/** Reads a schema's structural bigint constraints — mirrors extractNumberConstraints(). */
+export function extractBigIntConstraints(schema: z.ZodTypeAny): BigIntConstraints {
+  const c: BigIntConstraints = {};
+
+  if (isV4(schema)) {
+    const rawChecks = getChecks(schema);
+    const checks = normalizeV4Checks(rawChecks);
+
+    for (const cd of checks) {
+      switch (cd.check as string) {
+        case "greater_than":
+          if (cd.inclusive) c.min = cd.value as bigint;
+          else c.gt = cd.value as bigint;
+          break;
+        case "less_than":
+          if (cd.inclusive) c.max = cd.value as bigint;
+          else c.lt = cd.value as bigint;
+          break;
+        case "multiple_of":
+          c.multipleOf = cd.value as bigint;
+          break;
+      }
+    }
+  } else {
+    // v3
+    // .positive() → { kind: "min", value: 0n, inclusive: false } (exclusive → use gt)
+    // .nonnegative() → { kind: "min", value: 0n, inclusive: true }
+    // .negative() → { kind: "max", value: 0n, inclusive: false } (exclusive → use lt)
+    // .nonpositive() → { kind: "max", value: 0n, inclusive: true }
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const checks = getChecks(schema) as any[];
+
+    for (const check of checks) {
+      switch (check.kind) {
+        case "min":
+          if (check.inclusive === false) {
+            c.gt = check.value as bigint;
+          } else {
+            c.min = check.value as bigint;
+          }
+          break;
+        case "max":
+          if (check.inclusive === false) {
+            c.lt = check.value as bigint;
+          } else {
+            c.max = check.value as bigint;
+          }
+          break;
+        case "multipleOf": c.multipleOf = check.value; break;
+      }
+    }
+  }
+
+  return c;
 }
 
 export function generateBigInt(

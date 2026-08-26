@@ -14,6 +14,10 @@ import {
   getIntersectionParts,
   getLazyGetter,
   getBrandedInner,
+  getEffectsInfo,
+  getPipeInputSchema,
+  getPipeOutputSchema,
+  getUnionOptions,
 } from "./compat.js";
 import { leafKey } from "./generators/semantic.js";
 import { getGenerationHint } from "./hint.js";
@@ -22,7 +26,10 @@ import { getGenerationHint } from "./hint.js";
  * Unwraps schema layers that don't change the underlying object shape, so
  * override-path resolution can see through them: optional/nullable/default/
  * catch/readonly (peel to inner), branded (peel to base), lazy (resolve the
- * getter). Stops at anything else (object, intersection, union, primitives).
+ * getter), effects/pipe (peel to the schema dispatch() itself would generate
+ * from — the same input/output choice dispatch()'s own "effects"/"pipe" cases
+ * make, see zod-types.ts). Stops at anything else (object, intersection,
+ * union, primitives).
  */
 function unwrapForShapeLookup(schema: z.ZodTypeAny): z.ZodTypeAny {
   let s = schema;
@@ -44,6 +51,20 @@ function unwrapForShapeLookup(schema: z.ZodTypeAny): z.ZodTypeAny {
     }
     if (tn === "lazy") {
       s = getLazyGetter(s)();
+      continue;
+    }
+    if (tn === "effects") {
+      // v3 ZodEffects: refinement's inner is the same shape; transform/preprocess
+      // generate from their inner schema too (safeParse applies the effect once,
+      // at the root) — see dispatch()'s "effects" case.
+      s = getEffectsInfo(s).innerSchema;
+      continue;
+    }
+    if (tn === "pipe") {
+      // v4 ZodPipe: preprocess/coerce generate from the output schema, .transform()
+      // generates from the input schema — mirrors dispatch()'s "pipe" case exactly.
+      const pipeInput = getPipeInputSchema(s);
+      s = typeName(pipeInput) === "transform" ? getPipeOutputSchema(s) : pipeInput;
       continue;
     }
     break;
@@ -73,6 +94,47 @@ function resolveChildSchemaForOverride(
     return resolveChildSchemaForOverride(left, key) ?? resolveChildSchemaForOverride(right, key);
   }
   return null;
+}
+
+/**
+ * Synthesizes a base value for a union-typed position that needs an override
+ * merged into it. Unlike object/intersection, a union's shape genuinely
+ * depends on which branch applies — not knowable from the schema alone — so
+ * this picks the first branch whose shape declares every key the override
+ * mentions (a purely structural check: no schema execution, so it can never
+ * double-run a transform). If a branch matches, synthesizes a full value from
+ * it via dispatch() and merges the override on top; if none do — or the
+ * chosen branch's synthesis or merge fails — returns undefined so the caller
+ * falls back to the previous overwrite-wholesale behavior. Guessing the wrong
+ * branch is no worse than that fallback: the root pipeline's single safeParse
+ * still catches it the same way it always has.
+ */
+function synthesizeFromUnion(
+  unionSchema: z.ZodTypeAny,
+  overrides: Record<string, unknown>,
+  ctx: GenerationContext,
+  config: GlobalConfig,
+): unknown {
+  const overrideKeys = Object.keys(overrides);
+
+  for (const branch of getUnionOptions(unionSchema)) {
+    const concreteBranch = unwrapForShapeLookup(branch);
+    const branchType = typeName(concreteBranch);
+    if (branchType !== "object" && branchType !== "intersection") continue;
+
+    const allKeysResolve = overrideKeys.every(
+      (k) => resolveChildSchemaForOverride(concreteBranch, k) !== null,
+    );
+    if (!allKeysResolve) continue;
+
+    try {
+      const candidate = dispatch(concreteBranch, ctx, config, leafKey(ctx.path));
+      return mergeOverrides(concreteBranch, candidate, overrides, ctx, config);
+    } catch {
+      continue;
+    }
+  }
+  return undefined;
 }
 
 /**
@@ -122,6 +184,12 @@ function mergeOverrides(
     // base instead of bailing out here.
     if (concreteType === "object" || concreteType === "intersection") {
       effectiveBase = dispatch(concrete, ctx, config, leafKey(ctx.path));
+    } else if (concreteType === "union" || concreteType === "discriminated_union") {
+      const synthesized = synthesizeFromUnion(concrete, overrides, ctx, config);
+      // Already fully merged (recursively, per branch) — return directly rather
+      // than falling through to the generic per-key loop below, which would
+      // re-apply the same overrides on top of an already-merged result.
+      if (synthesized !== undefined) return synthesized;
     }
   }
 

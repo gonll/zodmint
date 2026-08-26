@@ -116,6 +116,57 @@ describe("z.intersection()", () => {
     }
   });
 
+  describe("shared numeric field range correlation", () => {
+    it("correlates overlapping required ranges on both sides", () => {
+      const schema = z.intersection(
+        z.object({ n: z.number().int().min(100) }),
+        z.object({ n: z.number().int().max(200) }),
+      );
+      for (let seed = 0; seed < 200; seed++) {
+        const result = mock(schema, { seed });
+        expect(schema.safeParse(result).success).toBe(true);
+        expect(result.n).toBeGreaterThanOrEqual(100);
+        expect(result.n).toBeLessThanOrEqual(200);
+      }
+    });
+
+    it("throws GENERATION_FAILED for disjoint required ranges", () => {
+      const schema = z.intersection(
+        z.object({ n: z.number().int().min(100) }),
+        z.object({ n: z.number().int().max(10) }),
+      );
+      expect(() => mock(schema)).toThrow(ZodForgeError);
+      try {
+        mock(schema);
+      } catch (e) {
+        expect((e as ZodForgeError).code).toBe("GENERATION_FAILED");
+      }
+    });
+
+    it("a required range on one side survives the other side's optional omission", () => {
+      const schema = z.intersection(
+        z.object({ n: z.number().int().min(5) }),
+        z.object({ n: z.number().int().max(50).optional() }),
+      );
+      for (let seed = 0; seed < 200; seed++) {
+        const result = mock(schema, { seed });
+        expect(schema.safeParse(result).success).toBe(true);
+        expect(result.n).toBeGreaterThanOrEqual(5);
+      }
+    });
+
+    it("correlates overlapping required bigint ranges", () => {
+      const schema = z.intersection(
+        z.object({ n: z.bigint().min(10n) }),
+        z.object({ n: z.bigint().max(20n) }),
+      );
+      for (let seed = 0; seed < 200; seed++) {
+        const result = mock(schema, { seed });
+        expect(schema.safeParse(result).success).toBe(true);
+      }
+    });
+  });
+
   describe("union of intersections with a widened shared enum field", () => {
     // Regression test: a real-world Kubb-generated OpenAPI shape where each
     // union branch is `narrowBase.and(z.object({ strategy: WIDE_ENUM.optional() }))`

@@ -150,6 +150,53 @@ describe("mock()", () => {
     expect(found).toBe(true);
   });
 
+  it("overriding into a union-typed field that generated as undefined picks the matching branch", () => {
+    // Regression test: when the union ITSELF is the thing that's missing (an
+    // optional field the RNG omitted), we can now pick a branch — the one
+    // whose shape structurally declares every override key — synthesize a
+    // full value from it, and merge the override on top, instead of bailing
+    // out to a raw overwrite that drops the branch's other required fields.
+    const branch1 = z.object({ kind: z.literal("a"), y: z.number(), zz: z.string() });
+    const branch2 = z.object({ kind: z.literal("b"), w: z.string() });
+    const schema = z.object({ x: z.union([branch1, branch2]).optional() });
+
+    let found = false;
+    for (let seed = 0; seed < 200 && !found; seed++) {
+      const plain = mock(schema, { seed });
+      if (plain.x === undefined) {
+        found = true;
+        const result = mock(schema, { seed, overrides: { x: { y: 5 } } });
+        expect(result.x).toMatchObject({ kind: "a", y: 5 });
+        expect(schema.safeParse(result).success).toBe(true);
+      }
+    }
+    expect(found).toBe(true);
+  });
+
+  it("overriding through a transform-wrapped optional object synthesizes the pre-transform shape", () => {
+    // Regression test: unwrapForShapeLookup() now sees through pipe/effects
+    // wrappers the same way dispatch() itself does, so an override into a
+    // `.transform()`-wrapped object that generated as undefined can still
+    // resolve the input shape's other required fields instead of bailing.
+    const inner = z
+      .object({ a: z.string(), b: z.number() })
+      .transform((v) => ({ ...v, c: true }));
+    const schema = z.object({ wrapped: inner.optional() });
+
+    let found = false;
+    for (let seed = 0; seed < 200 && !found; seed++) {
+      const plain = mock(schema, { seed });
+      if (plain.wrapped === undefined) {
+        found = true;
+        const result = mock(schema, { seed, overrides: { wrapped: { a: "hi" } } });
+        expect(result.wrapped?.a).toBe("hi");
+        expect(typeof result.wrapped?.b).toBe("number");
+        expect(schema.safeParse(result).success).toBe(true);
+      }
+    }
+    expect(found).toBe(true);
+  });
+
   it("overriding a path only reachable through a union falls back to overwrite without an internal crash", () => {
     // Behind a union we can't know which branch the override's schema-aware
     // synthesis should target without generating first, so mergeOverrides() bails

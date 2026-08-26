@@ -33,6 +33,33 @@ jobs:
       - name: Run tests
         run: npm test
 
+  test-zod-versions:
+    name: zod@${{ matrix.zod-version }}
+    runs-on: ubuntu-latest
+
+    strategy:
+      fail-fast: false
+      matrix:
+        zod-version: ["3.23.0", "latest"]
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Use Node.js 20
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: "npm"
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Install zod@${{ matrix.zod-version }}
+        run: npm install zod@${{ matrix.zod-version }} --no-save
+
+      - name: Run tests
+        run: npm test
+
   publish:
     name: Publish to npm
     needs: test

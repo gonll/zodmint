@@ -16,6 +16,9 @@ import {
   generateEdgeNumber,
   generateEdgeBigInt,
   generateEdgeDate,
+  extractNumberConstraints,
+  extractBigIntConstraints,
+  validateNumberConstraints,
   type StringConstraints,
   type NumberConstraints,
   type BigIntConstraints,
@@ -467,98 +470,7 @@ function dispatchNumber(
     if (custom !== undefined) return Number(custom);
   }
 
-  const c: NumberConstraints = {};
-
-  if (isV4(schema)) {
-    // v4-mini: z.int(), z.float32(), etc. store their format at the top level
-    // of def rather than in a checks array.
-    const topDef = rawDef(schema);
-    if (topDef.check === "number_format") {
-      const fmt = topDef.format as string | undefined;
-      if (fmt === "safeint" || fmt === "int" || fmt === "int32" || fmt === "int64" ||
-          fmt === "uint32" || fmt === "uint64") {
-        c.int = true;
-      }
-      // float32/float64 are just ordinary floats — no special constraint needed
-    }
-
-    const rawChecks = getChecks(schema);
-    const checks = normalizeV4Checks(rawChecks);
-
-    for (const cd of checks) {
-      switch (cd.check as string) {
-        case "greater_than":
-          if (cd.inclusive) {
-            c.gte = cd.value as number;
-            c.min = cd.value as number;
-            if ((cd.value as number) > 0) c.positive = true;
-            if ((cd.value as number) === 0) c.nonnegative = true;
-          } else {
-            c.gt = cd.value as number;
-            if ((cd.value as number) >= 0) c.positive = true;
-          }
-          break;
-        case "less_than":
-          if (cd.inclusive) {
-            c.lte = cd.value as number;
-            c.max = cd.value as number;
-            if ((cd.value as number) < 0) c.negative = true;
-            if ((cd.value as number) === 0) c.nonpositive = true;
-          } else {
-            c.lt = cd.value as number;
-            if ((cd.value as number) <= 0) c.negative = true;
-          }
-          break;
-        case "number_format":
-          if (cd.format === "safeint" || cd.format === "int") c.int = true;
-          if (cd.format === "finite") c.finite = true;
-          break;
-        case "multiple_of":
-          c.multipleOf = cd.value as number;
-          break;
-      }
-    }
-  } else {
-    // v3
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    const checks = getChecks(schema) as any[];
-
-    for (const check of checks) {
-      switch (check.kind) {
-        case "min": c.gte = check.value; c.min = check.value; break;
-        case "max": c.lte = check.value; c.max = check.value; break;
-        case "int": c.int = true; break;
-        case "multipleOf": c.multipleOf = check.value; break;
-        case "finite": c.finite = true; break;
-      }
-    }
-
-    // Handle positive / nonnegative / negative / nonpositive in v3.
-    // .positive() → { kind: "min", value: 0, inclusive: false }
-    // .nonnegative() → { kind: "min", value: 0, inclusive: true }
-    // .negative() → { kind: "max", value: 0, inclusive: false }
-    // .nonpositive() → { kind: "max", value: 0, inclusive: true }
-    for (const check of checks) {
-      if (check.kind === "min") {
-        if (check.value > 0) {
-          c.positive = true;
-        } else if (check.value === 0 && check.inclusive === false) {
-          c.positive = true;  // .positive() → min(0, exclusive) → must be > 0
-        } else if (check.value === 0) {
-          c.nonnegative = true;  // .nonnegative() → min(0, inclusive)
-        }
-      }
-      if (check.kind === "max") {
-        if (check.value < 0) {
-          c.negative = true;
-        } else if (check.value === 0 && check.inclusive === false) {
-          c.negative = true;  // .negative() → max(0, exclusive) → must be < 0
-        } else if (check.value === 0) {
-          c.nonpositive = true;  // .nonpositive() → max(0, inclusive)
-        }
-      }
-    }
-  }
+  const c = extractNumberConstraints(schema);
 
   if (ctx.mode === "edge") return generateEdgeNumber(c);
   // In random mode, skip semantic (name/description) inference — pass null as hint
@@ -578,56 +490,7 @@ function dispatchBigInt(
     if (custom !== undefined) return BigInt(custom as string | number | bigint | boolean);
   }
 
-  const c: BigIntConstraints = {};
-
-  if (isV4(schema)) {
-    const rawChecks = getChecks(schema);
-    const checks = normalizeV4Checks(rawChecks);
-
-    for (const cd of checks) {
-      switch (cd.check as string) {
-        case "greater_than":
-          if (cd.inclusive) c.min = cd.value as bigint;
-          else c.gt = cd.value as bigint;
-          break;
-        case "less_than":
-          if (cd.inclusive) c.max = cd.value as bigint;
-          else c.lt = cd.value as bigint;
-          break;
-        case "multiple_of":
-          c.multipleOf = cd.value as bigint;
-          break;
-      }
-    }
-  } else {
-    // v3
-    // .positive() → { kind: "min", value: 0n, inclusive: false } (exclusive → use gt)
-    // .nonnegative() → { kind: "min", value: 0n, inclusive: true }
-    // .negative() → { kind: "max", value: 0n, inclusive: false } (exclusive → use lt)
-    // .nonpositive() → { kind: "max", value: 0n, inclusive: true }
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    const checks = getChecks(schema) as any[];
-
-    for (const check of checks) {
-      switch (check.kind) {
-        case "min":
-          if (check.inclusive === false) {
-            c.gt = check.value as bigint;
-          } else {
-            c.min = check.value as bigint;
-          }
-          break;
-        case "max":
-          if (check.inclusive === false) {
-            c.lt = check.value as bigint;
-          } else {
-            c.max = check.value as bigint;
-          }
-          break;
-        case "multipleOf": c.multipleOf = check.value; break;
-      }
-    }
-  }
+  const c = extractBigIntConstraints(schema);
 
   if (ctx.mode === "edge") return generateEdgeBigInt(c);
   return generateBigInt(c, ctx.rng, ctx.path);
@@ -703,7 +566,17 @@ function dispatchOptional(
   // Decide BEFORE generating inner value
   if (!ctx.rng.bool(0.7)) return undefined;
   const inner = getInnerType(schema);
-  return dispatch(inner, ctx, config, leaf);
+  try {
+    return dispatch(inner, ctx, config, leaf);
+  } catch (e) {
+    // A field whose type is fundamentally unsupported (z.function(), z.never(), ...)
+    // is always a valid `undefined` when it's optional — no reason to let the 70%
+    // "generate" branch crash the whole schema over a leaf that could just be omitted.
+    // Anything else (GENERATION_FAILED, MAX_DEPTH_EXCEEDED, ...) still propagates —
+    // those indicate a real generation problem, not "this construct isn't supported."
+    if (e instanceof ZodForgeError && e.code === "UNSUPPORTED_SCHEMA") return undefined;
+    throw e;
+  }
 }
 
 function dispatchNullable(
@@ -717,7 +590,13 @@ function dispatchNullable(
   // Decide BEFORE generating inner value — null 20% of the time, inner value 80%
   if (ctx.rng.bool(0.2)) return null;
   const inner = getInnerType(schema);
-  return dispatch(inner, ctx, config, leaf);
+  try {
+    return dispatch(inner, ctx, config, leaf);
+  } catch (e) {
+    // Same reasoning as dispatchOptional() above, with `null` as the fallback.
+    if (e instanceof ZodForgeError && e.code === "UNSUPPORTED_SCHEMA") return null;
+    throw e;
+  }
 }
 
 function dispatchDefault(
@@ -873,6 +752,145 @@ function resolveLiteralOrEnumField(
 }
 
 /**
+ * Unwraps ZodOptional to find a number/bigint "core" for a field — the range-
+ * constraint counterpart of resolveLiteralOrEnumField(). Returns null for
+ * anything else, same bail-to-old-behavior contract.
+ */
+function resolveNumericField(
+  fieldSchema: z.ZodTypeAny,
+): { kind: "number" | "bigint"; schema: z.ZodTypeAny; optional: boolean } | null {
+  let current = fieldSchema;
+  let optional = false;
+  for (let i = 0; i < 5; i++) {
+    const tn = typeName(current);
+    if (tn === "optional") {
+      optional = true;
+      current = getInnerType(current);
+      continue;
+    }
+    if (tn === "number") return { kind: "number", schema: current, optional };
+    if (tn === "bigint") return { kind: "bigint", schema: current, optional };
+    return null;
+  }
+  return null;
+}
+
+function maxDefined<T extends number | bigint>(a: T | undefined, b: T | undefined): T | undefined {
+  if (a === undefined) return b;
+  if (b === undefined) return a;
+  return a > b ? a : b;
+}
+
+function minDefined<T extends number | bigint>(a: T | undefined, b: T | undefined): T | undefined {
+  if (a === undefined) return b;
+  if (b === undefined) return a;
+  return a < b ? a : b;
+}
+
+/** More-restrictive-wins merge of two NumberConstraints into one both sides agree with. */
+function mergeNumberConstraints(a: NumberConstraints, b: NumberConstraints): NumberConstraints {
+  return {
+    min: maxDefined(a.min, b.min),
+    gte: maxDefined(a.gte, b.gte),
+    gt: maxDefined(a.gt, b.gt),
+    max: minDefined(a.max, b.max),
+    lte: minDefined(a.lte, b.lte),
+    lt: minDefined(a.lt, b.lt),
+    int: a.int || b.int,
+    positive: a.positive || b.positive,
+    negative: a.negative || b.negative,
+    nonnegative: a.nonnegative || b.nonnegative,
+    nonpositive: a.nonpositive || b.nonpositive,
+    finite: a.finite || b.finite,
+    safe: a.safe || b.safe,
+    multipleOf: a.multipleOf ?? b.multipleOf,
+  };
+}
+
+/** More-restrictive-wins merge of two BigIntConstraints into one both sides agree with. */
+function mergeBigIntConstraints(a: BigIntConstraints, b: BigIntConstraints): BigIntConstraints {
+  return {
+    min: maxDefined(a.min, b.min),
+    gte: maxDefined(a.gte, b.gte),
+    gt: maxDefined(a.gt, b.gt),
+    max: minDefined(a.max, b.max),
+    lte: minDefined(a.lte, b.lte),
+    lt: minDefined(a.lt, b.lt),
+    positive: a.positive || b.positive,
+    negative: a.negative || b.negative,
+    nonnegative: a.nonnegative || b.nonnegative,
+    nonpositive: a.nonpositive || b.nonpositive,
+    multipleOf: a.multipleOf ?? b.multipleOf,
+  };
+}
+
+/**
+ * Number/bigint counterpart of the literal/enum correlation above: when a
+ * shared field is a plain ranged number/bigint on both sides (e.g. `min(10)`
+ * on one side, `max(100)` on the other — both individually satisfiable but
+ * generated independently, "right wins" merge could pick a value violating
+ * whichever side didn't win), this merges the two constraint sets and forces
+ * one value valid for both. Returns null (no correlation, old behavior
+ * applies) when the two sides aren't the same numeric kind, or declare
+ * different `multipleOf` values (combining those correctly needs an LCM,
+ * which isn't worth the complexity for how rare that combination is — safer
+ * to fall back than to silently drop one side's multipleOf requirement).
+ */
+function correlateNumericField(
+  leftField: z.ZodTypeAny,
+  rightField: z.ZodTypeAny,
+  ctx: GenerationContext,
+  key: string,
+): { forced: unknown } | null {
+  const l = resolveNumericField(leftField);
+  const r = resolveNumericField(rightField);
+  if (!l || !r || l.kind !== r.kind) return null;
+  if (
+    l.kind === "number" &&
+    (l.schema as z.ZodTypeAny) &&
+    extractNumberConstraints(l.schema).multipleOf !== undefined &&
+    extractNumberConstraints(r.schema).multipleOf !== undefined &&
+    extractNumberConstraints(l.schema).multipleOf !== extractNumberConstraints(r.schema).multipleOf
+  ) {
+    return null;
+  }
+
+  const bothOptional = l.optional && r.optional;
+  const path = [...ctx.path, key];
+
+  try {
+    if (l.kind === "number") {
+      const merged = mergeNumberConstraints(
+        extractNumberConstraints(l.schema),
+        extractNumberConstraints(r.schema),
+      );
+      validateNumberConstraints(merged, path);
+      let forced: unknown = generateNumber(merged, ctx.rng, path);
+      if (bothOptional && ctx.mode !== "edge" && !ctx.rng.bool(0.7)) forced = undefined;
+      return { forced };
+    }
+
+    const mergedBig = mergeBigIntConstraints(
+      extractBigIntConstraints(l.schema),
+      extractBigIntConstraints(r.schema),
+    );
+    if (
+      extractBigIntConstraints(l.schema).multipleOf !== undefined &&
+      extractBigIntConstraints(r.schema).multipleOf !== undefined &&
+      extractBigIntConstraints(l.schema).multipleOf !== extractBigIntConstraints(r.schema).multipleOf
+    ) {
+      return null;
+    }
+    let forced: unknown = generateBigInt(mergedBig, ctx.rng, path);
+    if (bothOptional && ctx.mode !== "edge" && !ctx.rng.bool(0.7)) forced = undefined;
+    return { forced };
+  } catch (e) {
+    if (bothOptional) return { forced: undefined };
+    throw e;
+  }
+}
+
+/**
  * Computes forced per-path value overrides for literal/enum fields declared
  * on both sides of an intersection's object shapes.
  *
@@ -907,9 +925,19 @@ function buildCorrelatedFieldGenerators(
 
   for (const key of Object.keys(leftShape)) {
     if (!(key in rightShape)) continue;
-    const l = resolveLiteralOrEnumField(leftShape[key] as z.ZodTypeAny);
-    const r = resolveLiteralOrEnumField(rightShape[key] as z.ZodTypeAny);
-    if (!l || !r) continue;
+    const leftField = leftShape[key] as z.ZodTypeAny;
+    const rightField = rightShape[key] as z.ZodTypeAny;
+
+    const l = resolveLiteralOrEnumField(leftField);
+    const r = resolveLiteralOrEnumField(rightField);
+    if (!l || !r) {
+      const numeric = correlateNumericField(leftField, rightField, ctx, key);
+      if (numeric) {
+        generators ??= {};
+        generators[[...ctx.path, key].join(".")] = () => numeric.forced;
+      }
+      continue;
+    }
 
     const leftValues = new Set(l.values);
     const shared = r.values.filter((v) => leftValues.has(v));
